@@ -41,10 +41,17 @@ protected:
   void closeEvent(QCloseEvent *event) override;
 
 private:
+  Workbench(const QString &root, bool restoreWorkspace);
   DocumentTab *current() const;
   DocumentTab *createTab(FileState file);
+  void attachTab(DocumentTab *tab);
   void bindView(DocumentTab *tab, EditorView *editor);
   void toggleSplit(DocumentTab *tab);
+  void splitTab(DocumentTab *tab, bool left);
+  void pinSplit(DocumentTab *tab, bool left);
+  void unpinSplit();
+  void showTabMenu(const QPoint &position);
+  void moveTabToNewWindow(DocumentTab *tab);
   void updateTitle(DocumentTab *tab);
   bool save(DocumentTab *tab);
   bool canClose(DocumentTab *tab);
@@ -55,6 +62,7 @@ private:
   void setupCommands();
   void applyTheme();
   void showSettings();
+  void updateTextWrap(bool enabled);
   void updateAppearance(const QString &theme, bool minimap,
                         const QJsonObject &overrides);
   QJsonObject currentTheme() const;
@@ -69,6 +77,11 @@ private:
   QJsonObject settings_;
   Commands commands_;
   QTabWidget *tabs_;
+  QSplitter *editorArea_;
+  QTabWidget *pinnedPane_ = nullptr;
+  DocumentTab *pinnedTab_ = nullptr;
+  bool pinnedLeft_ = false;
+  bool pinnedFocused_ = false;
   QDockWidget *terminalDock_;
   Sidebar *sidebar_;
   ActivityBar *activity_;
@@ -79,5 +92,6 @@ private:
   LspClient *lsp_;
   LspPanel *language_;
   bool minimap_ = true;
+  bool rememberWorkspace_ = true;
 };
 } // namespace nebula

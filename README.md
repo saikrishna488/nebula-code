@@ -2,6 +2,14 @@
 
 Nebula Code is an offline-first Qt Widgets editor for macOS (Intel and Apple Silicon) and Linux (x86-64 and ARM64). Each window contains a folder explorer, tabbed Scintilla editors, and an optional interactive terminal. A split shares its document and undo history with the original view. Each view keeps its own cursor and scroll position.
 
+Nebula Code has a small memory footprint. In the Linux benchmarks below, its process tree used a median of **35–70 MiB** across two file sizes and two architectures, about **94–97% less memory than VS Code** in the same runs.
+
+## Screenshots
+
+![Nebula Code on macOS in Light theme with a long Markdown paragraph wrapped across several lines](docs/screenshots/text-wrap.png)
+
+![Nebula Code on macOS in Dark theme with a Markdown guide and a checklist open side by side](docs/screenshots/split-editor.png)
+
 ## Build and run
 
 Use a C++20 compiler, CMake 3.25 or newer, Ninja, and Qt 6.5 or newer with Widgets, Core5Compat, and Test. The Release preset uses the host architecture. Use an empty build directory when switching compilers or architectures.
@@ -70,11 +78,15 @@ open build/dist/NebulaCode.app
 
 Use **File → Open Folder** or **Open Recent Folder** to switch workspaces in the current window. Nebula prompts for unsaved edits and restores the selected folder’s tabs and splits. Use the left activity bar to switch between Explorer and Source Control, find text in the current document, open the terminal, or open Settings. The **View** menu controls the split, minimap, terminal, theme, and source control panel. Search commands by name with **⌘⇧P**. **⌘D** selects the next occurrence for simultaneous editing. **⌘F** opens find and replace.
 
-Files use UTF-8. Saving preserves existing BOMs and line endings, checks for changes since the file was loaded, and atomically replaces the target. **File → Reload from Disk** reads the latest contents. Closing a modified tab offers to save or discard its edits. Closing a window records its file tabs, active document, split sizes, and cursor positions for the next session.
+Right-click a tab to choose **Split Left**, **Split Right**, **Move to New Window**, or **Close Tab**. Moving a tab keeps its unsaved edits, undo history, and split views.
+
+**View → Text Wrap** is enabled by default and wraps long lines to fit the editor width. Changes to this preference apply to open windows and persist across restarts.
+
+Files use UTF-8. Saving preserves existing BOMs and line endings, checks for changes since the file was loaded, and atomically replaces the target. **File → Reload from Disk** reads the latest contents. Closing a modified tab offers to save or discard its edits. The main workspace window records its file tabs, active document, split sizes, and cursor positions for the next session.
 
 Open or save Markdown documents with the `.md` or `.markdown` extension for highlighting of headings, emphasis, links, lists, quotes, and code.
 
-The terminal opens at the bottom in the workspace directory. Drag its upper edge to resize. Drag its title to move or detach it, or use the title-bar menu to choose a dock position. Hiding the panel keeps the session alive. Closing the panel or exiting its shell ends the session. The terminal retains up to 5,000 lines of history.
+The terminal opens in the workspace directory and docks at the bottom by default. Use the terminal title-bar menu to dock it at the top, right, bottom, or left. Nebula remembers the workspace's dock position. Drag the divider to resize. Hiding the panel keeps the session alive. Closing the panel or exiting its shell ends the session. The terminal retains up to 5,000 lines of history.
 
 ## C/C++ and Git
 
@@ -101,6 +113,7 @@ Nebula uses Qt's application configuration directory. Set `NEBULA_CONFIG_DIR` to
   "version": 1,
   "theme": "dark",
   "minimap": true,
+  "textWrap": true,
   "shell": "/bin/zsh",
   "clangd": "/usr/bin/clangd"
 }
@@ -143,9 +156,9 @@ xvfb-run -a --server-args="-screen 0 1280x800x24" python3 scripts/compare-editor
 
 The script alternates editor order and uses a fresh profile for every launch, with user extensions disabled in VS Code. It reports time from process launch to the first visible window titled for the input file, and process-tree proportional set size (PSS) five seconds later. The JSON includes raw samples, versions, and the host. The timing measures window visibility and does not measure typing latency.
 
-### Ubuntu 26.04 startup benchmark
+### Ubuntu 26.04 benchmarks
 
-Median time to a visible document window over seven fresh launches per editor and file size. Both editors ran on the same GitHub-hosted runner for each architecture using Xvfb. Speedup is VS Code's median divided by Nebula's median.
+Median time to a visible document window over seven fresh launches per editor and file size. Both editors ran on the same GitHub-hosted runner for each architecture using Xvfb. Speedup is VS Code's median divided by Nebula's median. These results are from Nebula revision `6028b09`, before Text Wrap was added.
 
 | Architecture | Plain-text file | Nebula 1.0.0 | VS Code 1.148.0 | Speedup |
 | --- | ---: | ---: | ---: | ---: |
@@ -153,6 +166,15 @@ Median time to a visible document window over seven fresh launches per editor an
 | x86-64 | 11.25 MB | 259 ms | 2.70 s | 10.4× |
 | ARM64 | 75 KB | 96 ms | 2.34 s | 24.4× |
 | ARM64 | 11.25 MB | 199 ms | 2.31 s | 11.6× |
+
+Median process-tree PSS five seconds after the document window became visible. PSS counts shared memory proportionally across processes.
+
+| Architecture | Plain-text file | Nebula 1.0.0 | VS Code 1.148.0 |
+| --- | ---: | ---: | ---: |
+| x86-64 | 75 KB | 35.08 MiB | 1,109.26 MiB |
+| x86-64 | 11.25 MB | 57.48 MiB | 1,194.06 MiB |
+| ARM64 | 75 KB | 48.60 MiB | 1,136.56 MiB |
+| ARM64 | 11.25 MB | 70.17 MiB | 1,188.78 MiB |
 
 [GitHub Actions run and raw benchmark artifacts](https://github.com/saikrishna488/nebula-code/actions/runs/45656171484)
 

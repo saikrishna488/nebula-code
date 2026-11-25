@@ -213,6 +213,7 @@ EditorView::EditorView(QWidget *parent)
     editor_->send(SCI_SETMULTIPASTE, SC_MULTIPASTE_EACH);
     editor_->send(SCI_SETSCROLLWIDTHTRACKING, true);
     editor_->send(SCI_SETSCROLLWIDTH, 1);
+    setTextWrapEnabled(true);
     editor_->send(SCI_SETMARGINTYPEN, lineNumberMargin, SC_MARGIN_NUMBER);
     editor_->send(SCI_SETMARGINWIDTHN, 1, 0);
     editor_->send(SCI_SETMARGINTYPEN, foldMargin, SC_MARGIN_SYMBOL);
@@ -457,6 +458,12 @@ void EditorView::setTheme(const EditorTheme &theme)
 
     updateLineNumberWidth();
     minimap_->setTheme(theme_);
+}
+
+void EditorView::setTextWrapEnabled(bool enabled)
+{
+    editor_->send(SCI_SETWRAPMODE, enabled ? SC_WRAP_WORD : SC_WRAP_NONE);
+    minimap_->update();
 }
 
 void EditorView::setMinimapVisible(bool visible)

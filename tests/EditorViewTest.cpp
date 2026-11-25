@@ -16,6 +16,7 @@ class EditorViewTest final : public QObject {
 
 private slots:
     void utf8AndLineEndings();
+    void textWrapChangesDisplayOnly();
     void sharedDocumentAndMultiCaretUndo();
     void syntaxAndFolding();
     void markdownSyntax();
@@ -36,6 +37,26 @@ void EditorViewTest::utf8AndLineEndings()
     QCOMPARE(view.cursorPosition(), qsizetype{5});
     QTest::keyClick(scintilla, Qt::Key_Return);
     QCOMPARE(view.textUtf8(), QByteArray("é漢\r\n\r\nline\r\n"));
+}
+
+void EditorViewTest::textWrapChangesDisplayOnly()
+{
+    EditorView view;
+    view.resize(320, 240);
+    const QByteArray text = QByteArray("long line ").repeated(100);
+    view.setTextUtf8(text);
+    view.show();
+
+    auto *scintilla = view.findChild<ScintillaEditBase *>();
+    QCOMPARE(scintilla->send(SCI_GETWRAPMODE), sptr_t{SC_WRAP_WORD});
+    QTRY_VERIFY(scintilla->send(SCI_WRAPCOUNT, 0) > 1);
+    view.setTextWrapEnabled(false);
+    QCOMPARE(scintilla->send(SCI_GETWRAPMODE), sptr_t{SC_WRAP_NONE});
+    QTRY_COMPARE(scintilla->send(SCI_WRAPCOUNT, 0), sptr_t{1});
+    view.setTextWrapEnabled(true);
+    QTRY_VERIFY(scintilla->send(SCI_WRAPCOUNT, 0) > 1);
+    QCOMPARE(view.textUtf8(), text);
+    QVERIFY(!view.isModified());
 }
 
 void EditorViewTest::sharedDocumentAndMultiCaretUndo()

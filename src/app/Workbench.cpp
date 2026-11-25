@@ -8,8 +8,6 @@
 #include "lsp/LspPanel.h"
 #include "terminal/TerminalDock.h"
 #include "terminal/TerminalSession.h"
-#include <QTabBar>
-
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
@@ -21,10 +19,12 @@
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -52,12 +52,15 @@ QString titleFor(const DocumentTab *tab) {
 }
 } // namespace
 
-Workbench::Workbench(const QString &root)
+Workbench::Workbench(const QString &root) : Workbench(root, true) {}
+
+Workbench::Workbench(const QString &root, bool restoreWorkspace)
     : root_(root.isEmpty() ? QString() : normalizedPath(root)),
       settings_(readJson(storagePath("settings.json"))),
       commands_(
           this,
-          readJson(storagePath("keybindings.json"))["bindings"].toObject()) {
+          readJson(storagePath("keybindings.json"))["bindings"].toObject()),
+      rememberWorkspace_(restoreWorkspace) {
   setAttribute(Qt::WA_DeleteOnClose);
   resize(1040, 700);
   theme_ = settings_["theme"].toString("light");
@@ -66,7 +69,14 @@ Workbench::Workbench(const QString &root)
   tabs_->setDocumentMode(true);
   tabs_->setMovable(true);
   tabs_->setTabsClosable(true);
-  setCentralWidget(tabs_);
+  auto *tabBar = tabs_->tabBar();
+  tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(tabBar, &QTabBar::customContextMenuRequested, this,
+          &Workbench::showTabMenu);
+  editorArea_ = new QSplitter;
+  editorArea_->setChildrenCollapsible(false);
+  editorArea_->addWidget(tabs_);
+  setCentralWidget(editorArea_);
   const auto dock = [this](const QString &title, Qt::DockWidgetArea area,
                            QWidget *content) {
     auto *d = new QDockWidget(title, this);
@@ -161,14 +171,19 @@ Workbench::Workbench(const QString &root)
   refreshActivity();
   connect(tabs_, &QTabWidget::tabCloseRequested, this, &Workbench::closeTab);
   connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+    pinnedFocused_ = false;
+    if (pinnedTab_ && tabs_->currentWidget() == pinnedTab_)
+      pinnedTab_->active = pinnedTab_->primary;
     updateTitle(current());
     commands_.refresh();
   });
   connect(qApp, &QApplication::focusChanged, this,
           [this] { commands_.refresh(); });
-  restoreSession(true);
-  if (!tabs_->count())
-    createTab({});
+  if (restoreWorkspace) {
+    restoreSession(true);
+    if (!tabs_->count())
+      createTab({});
+  }
   applyTheme();
   updateTitle(current());
   commands_.refresh();
@@ -178,7 +193,8 @@ Workbench *Workbench::openWorkspace(const QString &path) {
   const QString root = path.isEmpty() ? QString{} : normalizedPath(path);
   for (auto *widget : QApplication::topLevelWidgets()) {
     auto *window = dynamic_cast<Workbench *>(widget);
-    if (window && window->root_ == root && window->isVisible()) {
+    if (window && window->rememberWorkspace_ && window->root_ == root &&
+        window->isVisible()) {
       if (window->isMinimized())
         window->showNormal();
       window->raise();
@@ -217,6 +233,7 @@ bool Workbench::switchWorkspace(const QString &path) {
   const bool reopenTerminal = terminal_ && terminalDock_->isVisible();
   if (terminal_)
     terminalDock_->close();
+  unpinSplit();
   while (tabs_->count()) {
     auto *tab = tabs_->widget(0);
     tabs_->removeTab(0);
@@ -224,6 +241,7 @@ bool Workbench::switchWorkspace(const QString &path) {
   }
 
   root_ = nextRoot;
+  rememberWorkspace_ = true;
   lsp_->setWorkspace(root_);
   language_->clear();
   sidebar_->setWorkspace(root_);
@@ -255,7 +273,8 @@ bool Workbench::eventFilter(QObject *object, QEvent *event) {
 }
 
 DocumentTab *Workbench::current() const {
-  return static_cast<DocumentTab *>(tabs_->currentWidget());
+  return pinnedFocused_ ? pinnedTab_
+                        : static_cast<DocumentTab *>(tabs_->currentWidget());
 }
 void Workbench::report(const QString &message) {
   statusBar()->showMessage(message, 12000);
@@ -275,21 +294,27 @@ DocumentTab *Workbench::createTab(FileState file) {
   tab->sync = new QTimer(tab);
   tab->sync->setSingleShot(true);
   tab->sync->setInterval(120);
-  connect(tab->sync, &QTimer::timeout, tab, [this, tab] {
+  attachTab(tab);
+  return tab;
+}
+void Workbench::attachTab(DocumentTab *tab) {
+  connect(tab->sync, &QTimer::timeout, this, [this, tab] {
     lsp_->changeDocument(tab->file.path,
                          QString::fromUtf8(tab->primary->textUtf8()));
   });
-  connect(tab->primary, &EditorView::textChanged, tab, [this, tab] {
+  connect(tab->primary, &EditorView::textChanged, this, [this, tab] {
     if (tab->languageService) {
       lsp_->invalidateDocument(tab->file.path);
       tab->sync->start();
     }
   });
   bindView(tab, tab->primary);
+  if (tab->secondary)
+    bindView(tab, tab->secondary);
   tabs_->setCurrentIndex(tabs_->addTab(tab, titleFor(tab)));
-  tab->primary->setFocus();
+  tab->active->setFocus();
+  updateTitle(tab);
   updateLanguage(tab);
-  return tab;
 }
 void Workbench::updateLanguage(DocumentTab *tab) {
   tab->languageService = !root_.isEmpty() &&
@@ -302,13 +327,16 @@ void Workbench::updateLanguage(DocumentTab *tab) {
 void Workbench::bindView(DocumentTab *tab, EditorView *view) {
   view->setTheme(colors(currentTheme()));
   view->setMinimapVisible(minimap_);
-  connect(view, &EditorView::editorFocused, tab, [this, tab, view] {
+  view->setTextWrapEnabled(settings_["textWrap"].toBool(true));
+  connect(view, &EditorView::editorFocused, this, [this, tab, view] {
+    pinnedFocused_ = tab == pinnedTab_ && view == tab->secondary;
     tab->active = view;
+    updateTitle(tab);
     commands_.refresh();
   });
-  connect(view, &EditorView::modificationChanged, tab,
+  connect(view, &EditorView::modificationChanged, this,
           [this, tab] { updateTitle(tab); });
-  connect(view, &EditorView::cursorChanged, tab, [this, view] {
+  connect(view, &EditorView::cursorChanged, this, [this, view] {
     if (current() && current()->active == view)
       statusBar()->showMessage(tr("Line %1   Column %2")
                                    .arg(view->cursorLine() + 1)
@@ -319,18 +347,105 @@ void Workbench::toggleSplit(DocumentTab *tab) {
   if (!tab)
     return;
   if (tab->secondary) {
+    const bool wasPinned = tab == pinnedTab_;
+    if (wasPinned)
+      unpinSplit();
     tab->active = tab->primary;
     delete tab->secondary;
     tab->secondary = nullptr;
+    if (wasPinned)
+      tab = static_cast<DocumentTab *>(tabs_->currentWidget());
   } else {
+    splitTab(tab, false);
+    return;
+  }
+  tab->active->setFocus();
+}
+void Workbench::splitTab(DocumentTab *tab, bool left) {
+  if (!tab->secondary) {
     tab->secondary = new EditorView;
     tab->secondary->shareDocumentFrom(*tab->primary);
     bindView(tab, tab->secondary);
-    tab->addWidget(tab->secondary);
+    tab->insertWidget(left ? 0 : 1, tab->secondary);
     tab->setSizes({1, 1});
-    tab->active = tab->secondary;
+  } else {
+    tab->insertWidget(left ? 0 : 1, tab->secondary);
   }
+  tab->active = tab->secondary;
   tab->active->setFocus();
+}
+void Workbench::pinSplit(DocumentTab *tab, bool left) {
+  if (pinnedTab_ != tab) {
+    unpinSplit();
+    splitTab(tab, left);
+    pinnedTab_ = tab;
+    pinnedPane_ = new QTabWidget;
+    pinnedPane_->setDocumentMode(true);
+    pinnedPane_->setTabsClosable(true);
+    pinnedPane_->tabBar()->setStyleSheet(tabs_->tabBar()->styleSheet());
+    pinnedPane_->addTab(tab->secondary, titleFor(tab));
+    connect(pinnedPane_, &QTabWidget::tabCloseRequested, this,
+            [this, tab] { toggleSplit(tab); });
+  }
+  pinnedLeft_ = left;
+  editorArea_->insertWidget(left ? 0 : 1, pinnedPane_);
+  editorArea_->setSizes({1, 1});
+  tab->secondary->show();
+  tab->secondary->setFocus();
+  pinnedFocused_ = tab->secondary->hasFocus();
+  updateTitle(tab);
+  updateTitle(current());
+  commands_.refresh();
+}
+void Workbench::unpinSplit() {
+  if (!pinnedTab_)
+    return;
+  auto *tab = pinnedTab_;
+  pinnedTab_ = nullptr;
+  pinnedFocused_ = false;
+  pinnedPane_->removeTab(0);
+  tab->insertWidget(pinnedLeft_ ? 0 : 1, tab->secondary);
+  pinnedPane_->hide();
+  pinnedPane_->setParent(this);
+  pinnedPane_->deleteLater();
+  pinnedPane_ = nullptr;
+  tab->setSizes({1, 1});
+  tab->secondary->show();
+}
+void Workbench::showTabMenu(const QPoint &position) {
+  auto *bar = tabs_->tabBar();
+  const int index = bar->tabAt(position);
+  if (index < 0)
+    return;
+  tabs_->setCurrentIndex(index);
+  auto *tab = static_cast<DocumentTab *>(tabs_->widget(index));
+  QMenu menu(bar);
+  menu.addAction(tr("Split Left"), this, [this, tab] { pinSplit(tab, true); });
+  menu.addAction(tr("Split Right"), this, [this, tab] { pinSplit(tab, false); });
+  menu.addAction(tr("Move to New Window"), this,
+                 [this, tab] { moveTabToNewWindow(tab); });
+  menu.addSeparator();
+  menu.addAction(tr("Close Tab"), this,
+                 [this, tab] { closeTab(tabs_->indexOf(tab)); });
+  menu.exec(bar->mapToGlobal(position));
+}
+void Workbench::moveTabToNewWindow(DocumentTab *tab) {
+  if (tab == pinnedTab_)
+    unpinSplit();
+  auto *window = new Workbench(root_, false);
+  tab->sync->stop();
+  if (tab->languageService)
+    lsp_->closeDocument(tab->file.path);
+  disconnect(tab->sync, nullptr, this, nullptr);
+  disconnect(tab->primary, nullptr, this, nullptr);
+  if (tab->secondary)
+    disconnect(tab->secondary, nullptr, this, nullptr);
+  tabs_->removeTab(tabs_->indexOf(tab));
+  if (!tabs_->count())
+    createTab({});
+  window->attachTab(tab);
+  window->show();
+  window->activateWindow();
 }
 bool Workbench::openFile(const QString &path) {
   const QString normalized = normalizedPath(path);
@@ -338,6 +453,9 @@ bool Workbench::openFile(const QString &path) {
     auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
     if (tab->file.path == normalized) {
       tabs_->setCurrentIndex(i);
+      pinnedFocused_ = false;
+      if (tab == pinnedTab_)
+        tab->active = tab->primary;
       tab->active->setFocus();
       return true;
     }
@@ -348,7 +466,7 @@ bool Workbench::openFile(const QString &path) {
     report(tr("Cannot open %1 — %2").arg(path, error));
     return false;
   }
-  auto *empty = current();
+  auto *empty = static_cast<DocumentTab *>(tabs_->currentWidget());
   const bool replaceBlank = empty && empty->file.path.isEmpty() &&
                             !empty->primary->isModified() && !empty->secondary;
   createTab(std::move(file));
@@ -366,6 +484,10 @@ void Workbench::updateTitle(DocumentTab *tab) {
   if (index >= 0) {
     tabs_->setTabText(index, title);
     tabs_->setTabToolTip(index, tab->file.path);
+  }
+  if (tab == pinnedTab_) {
+    pinnedPane_->setTabText(0, title);
+    pinnedPane_->setTabToolTip(0, tab->file.path);
   }
   if (tab == current())
     setWindowTitle(
@@ -454,6 +576,8 @@ void Workbench::closeTab(int index) {
   auto *tab = static_cast<DocumentTab *>(tabs_->widget(index));
   if (!canClose(tab))
     return;
+  if (tab == pinnedTab_)
+    unpinSplit();
   if (tab->languageService)
     lsp_->closeDocument(tab->file.path);
   tabs_->removeTab(index);
@@ -547,7 +671,7 @@ void Workbench::setupCommands() {
       [this] { return current() && !current()->file.path.isEmpty(); });
   add(
       file, "file.close", tr("Close Tab"), QKeySequence::Close,
-      [this] { closeTab(tabs_->currentIndex()); }, hasTab);
+      [this] { closeTab(tabs_->indexOf(current())); }, hasTab);
   auto action = [&](const char *id, QString name, QKeySequence key,
                     void (EditorView::*fn)()) {
     add(
@@ -605,6 +729,12 @@ void Workbench::setupCommands() {
   add(view, "view.minimap", tr("Toggle Minimap"), {}, [this] {
     updateAppearance(theme_, !minimap_, settings_["themeOverrides"].toObject());
   });
+  auto *textWrap = commands_.add("view.textWrap", tr("Text Wrap"), {}, [this] {
+    updateTextWrap(!settings_["textWrap"].toBool(true));
+  });
+  textWrap->setCheckable(true);
+  textWrap->setChecked(settings_["textWrap"].toBool(true));
+  view->addAction(textWrap);
   add(view, "view.theme", tr("Choose Theme…"), {}, [this] { showSettings(); });
   add(edit, "workbench.settings", tr("Settings…"), QKeySequence("Ctrl+,"),
       [this] { showSettings(); });
@@ -731,6 +861,27 @@ void Workbench::showSettings() {
                      dialog.themeOverrides());
 }
 
+void Workbench::updateTextWrap(bool enabled) {
+  const QString path = storagePath("settings.json");
+  auto updated = readJson(path);
+  updated["textWrap"] = enabled;
+  QString error;
+  if (!writeJson(path, updated, error)) {
+    findChild<QAction *>("view.textWrap")->setChecked(
+        settings_["textWrap"].toBool(true));
+    QMessageBox::warning(this, tr("Cannot Save Settings"), error);
+    return;
+  }
+  for (auto *widget : QApplication::topLevelWidgets()) {
+    if (auto *window = dynamic_cast<Workbench *>(widget)) {
+      window->settings_["textWrap"] = enabled;
+      window->findChild<QAction *>("view.textWrap")->setChecked(enabled);
+      for (auto *editor : window->editorArea_->findChildren<EditorView *>())
+        editor->setTextWrapEnabled(enabled);
+    }
+  }
+}
+
 void Workbench::updateAppearance(const QString &theme, bool minimap,
                                  const QJsonObject &overrides) {
   const QString path = storagePath("settings.json");
@@ -782,8 +933,10 @@ void Workbench::applyTheme() {
                      "border-top-color: %5; }")
           .arg(panel.name(), sidebarText.name(), theme.background.name(),
                theme.foreground.name(), accent.name()));
+  if (pinnedPane_)
+    pinnedPane_->tabBar()->setStyleSheet(tabs_->tabBar()->styleSheet());
 
-  for (auto *v : tabs_->findChildren<EditorView *>()) {
+  for (auto *v : editorArea_->findChildren<EditorView *>()) {
     v->setTheme(theme);
     v->setMinimapVisible(minimap_);
   }
@@ -792,17 +945,34 @@ void Workbench::applyTheme() {
 }
 void Workbench::restoreSession(bool restoreWindowGeometry) {
   auto data = readJson(sessionPath(root_));
+  const auto terminalArea = Qt::DockWidgetArea(
+      data["terminalArea"].toInt(Qt::BottomDockWidgetArea));
+  switch (terminalArea) {
+  case Qt::TopDockWidgetArea:
+  case Qt::RightDockWidgetArea:
+  case Qt::BottomDockWidgetArea:
+  case Qt::LeftDockWidgetArea:
+    addDockWidget(terminalArea, terminalDock_);
+    break;
+  default:
+    addDockWidget(Qt::BottomDockWidgetArea, terminalDock_);
+    break;
+  }
   for (const auto &entry : data["tabs"].toArray()) {
     const auto obj = entry.toObject();
     const auto path = obj["path"].toString();
     if (path.isEmpty() || !openFile(path))
       continue;
-    auto *tab = current();
+    auto *tab = static_cast<DocumentTab *>(tabs_->currentWidget());
     tab->primary->setCursorPosition(obj["cursor"].toInteger());
     if (obj["split"].toBool()) {
-      toggleSplit(tab);
+      if (obj["pinned"].toBool())
+        pinSplit(tab, obj["splitLeft"].toBool());
+      else
+        splitTab(tab, obj["splitLeft"].toBool());
       tab->secondary->setCursorPosition(obj["secondCursor"].toInteger());
-      tab->restoreState(
+      auto *splitter = tab == pinnedTab_ ? editorArea_ : tab;
+      splitter->restoreState(
           QByteArray::fromBase64(obj["sizes"].toString().toLatin1()));
       if (!obj["focusSecond"].toBool())
         tab->active = tab->primary;
@@ -813,15 +983,20 @@ void Workbench::restoreSession(bool restoreWindowGeometry) {
     auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
     if (tab->file.path == selected) {
       tabs_->setCurrentIndex(i);
-      tab->active->setFocus();
+      auto *view = tab == pinnedTab_ ? tab->primary : tab->active;
+      view->setFocus();
       break;
     }
   }
+  if (pinnedTab_ && data["pinnedFocused"].toBool())
+    pinnedTab_->secondary->setFocus();
   if (restoreWindowGeometry)
     restoreGeometry(
         QByteArray::fromBase64(data["geometry"].toString().toLatin1()));
 }
 void Workbench::rememberSession() {
+  if (!rememberWorkspace_)
+    return;
   QJsonArray files;
   for (int i = 0; i < tabs_->count(); ++i) {
     auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
@@ -831,15 +1006,23 @@ void Workbench::rememberSession() {
         {"path", tab->file.path},
         {"cursor", qint64(tab->primary->cursorPosition())},
         {"split", tab->secondary != nullptr},
+        {"pinned", tab == pinnedTab_},
+        {"splitLeft", tab == pinnedTab_
+                          ? pinnedLeft_
+                          : tab->secondary && tab->indexOf(tab->secondary) == 0},
         {"secondCursor",
          qint64(tab->secondary ? tab->secondary->cursorPosition() : 0)},
         {"focusSecond", tab->secondary && tab->active == tab->secondary},
-        {"sizes", QString::fromLatin1(tab->saveState().toBase64())}});
+        {"sizes", QString::fromLatin1((tab == pinnedTab_ ? editorArea_ : tab)
+                                  ->saveState().toBase64())}});
   }
+  auto *selected = static_cast<DocumentTab *>(tabs_->currentWidget());
   QString error;
   if (!writeJson(sessionPath(root_),
                  {{"tabs", files},
-                  {"active", current() ? current()->file.path : QString()},
+                  {"terminalArea", int(dockWidgetArea(terminalDock_))},
+                  {"active", selected ? selected->file.path : QString()},
+                  {"pinnedFocused", pinnedFocused_},
                   {"geometry", QString::fromLatin1(saveGeometry().toBase64())}},
                  error))
     report(error);

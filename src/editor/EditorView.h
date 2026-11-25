@@ -39,6 +39,7 @@ public:
     void setDarkTheme(bool dark);
     void setTheme(const EditorTheme &theme);
     void setMinimapVisible(bool visible);
+    void setTextWrapEnabled(bool enabled);
     void addNextOccurrence();
     void toggleFold();
     bool findNext(const QString &text, bool backwards = false, bool caseSensitive = false);

@@ -15,11 +15,13 @@
 #include <QTreeView>
 #include <QPushButton>
 #include <QInputDialog>
+#include <QMenu>
 #include <QMessageBox>
 #include <QSpinBox>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -30,6 +32,34 @@ using namespace nebula;
 class WorkbenchTest : public QObject {
   Q_OBJECT
 private slots:
+  void textWrapPreferenceIsSharedAndPersistent() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    Workbench first(dir.path());
+    Workbench second(dir.path());
+    auto *action = first.findChild<QAction *>("view.textWrap");
+    auto *otherAction = second.findChild<QAction *>("view.textWrap");
+    QVERIFY(action && otherAction);
+    QVERIFY(action->isCheckable());
+    QVERIFY(action->isChecked());
+    QVERIFY(otherAction->isChecked());
+
+    action->trigger();
+    QVERIFY(!action->isChecked());
+    QVERIFY(!otherAction->isChecked());
+    QCOMPARE(readJson(storagePath("settings.json")).value("textWrap"),
+             QJsonValue(false));
+
+    Workbench reopened(dir.path());
+    auto *reopenedAction = reopened.findChild<QAction *>("view.textWrap");
+    QVERIFY(reopenedAction);
+    QVERIFY(!reopenedAction->isChecked());
+    otherAction->trigger();
+    QVERIFY(action->isChecked());
+    QVERIFY(reopenedAction->isChecked());
+  }
+
   void displaysCredits() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -85,8 +115,9 @@ private slots:
       QCOMPARE(copied.count(), count);
     };
     copyFromTerminal(&window, 1);
-    dock->setFloating(true);
-    copyFromTerminal(dock, 2);
+    window.findChild<QAction *>("view.terminal")->trigger();
+    window.findChild<QAction *>("view.terminal")->trigger();
+    copyFromTerminal(&window, 2);
   }
 
   void sidebarAppearanceAndTerminal() {
@@ -152,16 +183,124 @@ private slots:
     QVERIFY(window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea);
     QPointer<TerminalSession> shell = dock->findChild<TerminalSession *>();
     QVERIFY(shell);
-    dock->setFloating(true);
-    QVERIFY(dock->isFloating());
-    for (auto *action : dock->findChildren<QAction *>())
-      if (action->text() == "Move to Right")
-        action->trigger();
-    QVERIFY(!dock->isFloating());
-    QVERIFY(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
-    QCOMPARE(dock->widget(), shell.data());
+    const auto features = dock->features();
+    QVERIFY(!features.testFlag(QDockWidget::DockWidgetFloatable));
+    QVERIFY(!features.testFlag(QDockWidget::DockWidgetMovable));
+    const std::pair<const char *, Qt::DockWidgetArea> placements[] = {
+        {"Move to Top", Qt::TopDockWidgetArea},
+        {"Move to Right", Qt::RightDockWidgetArea},
+        {"Move to Bottom", Qt::BottomDockWidgetArea},
+        {"Move to Left", Qt::LeftDockWidgetArea}};
+    for (const auto &[title, area] : placements) {
+      QAction *placement = nullptr;
+      for (auto *action : dock->findChildren<QAction *>())
+        if (action->text() == title)
+          placement = action;
+      QVERIFY(placement);
+      placement->trigger();
+      QVERIFY(!dock->isFloating());
+      QCOMPARE(window.dockWidgetArea(dock), area);
+      QCOMPARE(dock->widget(), shell.data());
+    }
     dock->close();
     QTRY_VERIFY(shell.isNull());
+  }
+
+  void tabMenuSplitsAndMovesLiveDocument() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    Workbench window(dir.path());
+    window.show();
+    auto *tabs = window.findChild<QTabWidget *>();
+    auto *tab = static_cast<DocumentTab *>(tabs->currentWidget());
+    QVERIFY(tab);
+    tab->primary->replaceRange(0, 0, "Unsaved edit");
+    const auto choose = [&](const QString &label) {
+      bool triggered = false;
+      QTimer::singleShot(0, &window, [&] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+          return;
+        for (auto *action : menu->actions()) {
+          if (action->text() != label)
+            continue;
+          menu->close();
+          action->trigger();
+          triggered = true;
+          return;
+        }
+        menu->close();
+      });
+      auto *bar = tabs->tabBar();
+      emit bar->customContextMenuRequested(bar->tabRect(0).center());
+      QVERIFY(triggered);
+    };
+    auto *editorArea = qobject_cast<QSplitter *>(window.centralWidget());
+    QVERIFY(editorArea);
+    choose("Split Left");
+    auto *pane = qobject_cast<QTabWidget *>(editorArea->widget(0));
+    QVERIFY(pane);
+    QCOMPARE(pane->currentWidget(), tab->secondary);
+    QCOMPARE(pane->tabText(0), tabs->tabText(0));
+    QCOMPARE(tab->secondary->textUtf8(), QByteArray("Unsaved edit"));
+    choose("Split Right");
+    QCOMPARE(editorArea->widget(1), pane);
+    QFile other(dir.filePath("other.txt"));
+    QVERIFY(other.open(QIODevice::WriteOnly));
+    QCOMPARE(other.write("Other file"), 10);
+    other.close();
+    QVERIFY(window.openFile(other.fileName()));
+    auto *opened = static_cast<DocumentTab *>(tabs->currentWidget());
+    QVERIFY(opened != tab);
+    QCOMPARE(opened->primary->textUtf8(), QByteArray("Other file"));
+    QCOMPARE(editorArea->widget(1), pane);
+    QVERIFY(tab->secondary->isVisible());
+    QCOMPARE(tab->secondary->textUtf8(), QByteArray("Unsaved edit"));
+    auto *close = pane->tabBar()->tabButton(0, QTabBar::RightSide);
+    if (!close)
+      close = pane->tabBar()->tabButton(0, QTabBar::LeftSide);
+    QVERIFY(close && close->isVisible());
+    QTest::mouseClick(close, Qt::LeftButton);
+    QCOMPARE(editorArea->count(), 1);
+    QVERIFY(!tab->secondary);
+    QCOMPARE(tabs->currentWidget(), opened);
+    QCOMPARE(tab->primary->textUtf8(), QByteArray("Unsaved edit"));
+    choose("Split Right");
+    choose("Move to New Window");
+    auto *destination = dynamic_cast<Workbench *>(tab->window());
+    QVERIFY(destination && destination != &window);
+    QCOMPARE(destination->findChild<QTabWidget *>()->currentWidget(), tab);
+    QVERIFY(tabs->currentWidget() != tab);
+    QCOMPARE(tab->primary->textUtf8(), QByteArray("Unsaved edit"));
+    QVERIFY(tab->primary->isModified());
+    tab->secondary->undo();
+    QCOMPARE(tab->primary->textUtf8(), QByteArray());
+    QVERIFY(destination->close());
+
+    choose("Split Right");
+    QFile third(dir.filePath("third.txt"));
+    QVERIFY(third.open(QIODevice::WriteOnly));
+    third.close();
+    QVERIFY(window.openFile(third.fileName()));
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    QVERIFY(window.close());
+
+    Workbench restored(dir.path());
+    restored.show();
+    auto *restoredArea = qobject_cast<QSplitter *>(restored.centralWidget());
+    QVERIFY(restoredArea);
+    QCOMPARE(restoredArea->count(), 2);
+    auto *restoredPane = qobject_cast<QTabWidget *>(restoredArea->widget(1));
+    QVERIFY(restoredPane);
+    QCOMPARE(restoredPane->tabText(0), QString("other.txt"));
+    auto *right = qobject_cast<EditorView *>(restoredPane->currentWidget());
+    QVERIFY(right && right->isVisible());
+    QCOMPARE(right->textUtf8(), QByteArray("Other file"));
+    auto *restoredTabs = qobject_cast<QTabWidget *>(restoredArea->widget(0));
+    QVERIFY(restoredTabs);
+    auto *selected = static_cast<DocumentTab *>(restoredTabs->currentWidget());
+    QCOMPARE(selected->file.path, normalizedPath(third.fileName()));
   }
 
   void sessionAndConflicts() {
@@ -182,6 +321,9 @@ private slots:
     auto *tabs = window->findChild<QTabWidget *>();
     auto *tab = static_cast<DocumentTab *>(tabs->currentWidget());
     QVERIFY(tab->secondary);
+    tab->insertWidget(0, tab->secondary);
+    window->addDockWidget(Qt::TopDockWidgetArea,
+                          window->findChild<QDockWidget *>("Terminal"));
     tab->primary->replaceRange(0, 3, "updated");
     QCOMPARE(tab->secondary->textUtf8(), "updated\r\n");
     QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
@@ -209,6 +351,9 @@ private slots:
     QCOMPARE(tabs->count(), 1);
     tab = static_cast<DocumentTab *>(tabs->currentWidget());
     QVERIFY(tab->secondary);
+    QCOMPARE(tab->widget(0), static_cast<QWidget *>(tab->secondary));
+    QCOMPARE(window->dockWidgetArea(window->findChild<QDockWidget *>("Terminal")),
+             Qt::TopDockWidgetArea);
     QCOMPARE(tab->file.path, normalizedPath(path));
     QCOMPARE(tab->primary->cursorPosition(), 1);
     QCOMPARE(tab->secondary->cursorPosition(), 3);
