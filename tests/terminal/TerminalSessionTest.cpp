@@ -4,6 +4,7 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -21,6 +22,9 @@ class TerminalSessionTest final : public QObject
 
 private slots:
     void rejectsInvalidLaunch();
+#ifdef Q_OS_MACOS
+    void loadsLoginProfile();
+#endif
     void runsInteractiveShellInWorkspace();
     void editsFileInFullScreenVim();
     void reapsShellWhenDestroyed();
@@ -38,6 +42,37 @@ void TerminalSessionTest::rejectsInvalidLaunch()
     QVERIFY(!missingProgram.start(QStringLiteral("/no-such-shell")));
     QVERIFY(!missingProgram.errorString().isEmpty());
 }
+
+#ifdef Q_OS_MACOS
+void TerminalSessionTest::loadsLoginProfile()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile profile(QDir(directory.path()).filePath(QStringLiteral(".zprofile")));
+    QVERIFY(profile.open(QIODevice::WriteOnly));
+    QVERIFY(profile.write("export NEBULA_LOGIN_PROFILE=loaded\n") > 0);
+    profile.close();
+
+    const QByteArray previousZdotdir = qgetenv("ZDOTDIR");
+    const auto restoreZdotdir = qScopeGuard([&] {
+        if (previousZdotdir.isNull())
+            qunsetenv("ZDOTDIR");
+        else
+            qputenv("ZDOTDIR", previousZdotdir);
+    });
+    QVERIFY(qputenv("ZDOTDIR", QFile::encodeName(directory.path())));
+
+    QString output;
+    TerminalSession session(directory.path());
+    auto *widget = session.findChild<QTermWidget *>();
+    QVERIFY(widget);
+    connect(widget, &QTermWidget::receivedData, &session,
+        [&output](const QString &data) { output += data; });
+    QVERIFY2(session.start(QStringLiteral("/bin/zsh")), qPrintable(session.errorString()));
+    widget->sendText(QStringLiteral("printf 'PROFILE_%s\\n' \"$NEBULA_LOGIN_PROFILE\"\n"));
+    QTRY_VERIFY(output.contains(QStringLiteral("PROFILE_loaded")));
+}
+#endif
 
 void TerminalSessionTest::runsInteractiveShellInWorkspace()
 {

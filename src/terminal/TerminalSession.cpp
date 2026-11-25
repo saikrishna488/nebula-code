@@ -69,7 +69,14 @@ bool TerminalSession::start(const QString &shell, const QStringList &arguments)
     }
 
     QStringList environment{QStringLiteral("TERM=xterm-256color")};
+    QStringList shellArguments = arguments;
 #ifdef Q_OS_MACOS
+    // Match Terminal.app's login-shell startup so GUI launches load the user's PATH.
+    const QString shellName = QFileInfo(executable).fileName();
+    if (shellArguments.isEmpty()
+        && (shellName == QStringLiteral("zsh") || shellName == QStringLiteral("bash"))) {
+        shellArguments.append(QStringLiteral("-l"));
+    }
     if (qEnvironmentVariableIsEmpty("LC_ALL") && qEnvironmentVariableIsEmpty("LC_CTYPE")
         && qEnvironmentVariableIsEmpty("LANG")) {
         environment.append(QStringLiteral("LC_CTYPE=en_US.UTF-8"));
@@ -78,7 +85,7 @@ bool TerminalSession::start(const QString &shell, const QStringList &arguments)
     terminal_->setEnvironment(environment);
     terminal_->setWorkingDirectory(workingDirectory_);
     terminal_->setShellProgram(executable);
-    terminal_->setArgs(arguments);
+    terminal_->setArgs(shellArguments);
     terminal_->startShellProgram();
     if (terminal_->getShellPID() <= 0) {
         error_ = tr("Could not start “%1” in a pseudo-terminal.").arg(executable);

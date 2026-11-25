@@ -4,6 +4,7 @@
 #include "terminal/TerminalSession.h"
 #include <QAction>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDir>
@@ -16,6 +17,7 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QSpinBox>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -28,6 +30,65 @@ using namespace nebula;
 class WorkbenchTest : public QObject {
   Q_OBJECT
 private slots:
+  void displaysCredits() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    Workbench window(dir.path());
+    auto *action = window.findChild<QAction *>("help.credits");
+    QVERIFY(action);
+    QString text;
+    QTimer::singleShot(0, &window, [&] {
+      auto *dialog = window.findChild<QMessageBox *>();
+      if (dialog) {
+        text = dialog->text();
+        dialog->accept();
+      }
+    });
+    action->trigger();
+    QVERIFY(text.contains("@saikrishna488"));
+    QVERIFY(text.contains("Codex (GPT-6.2 Sol)"));
+  }
+
+  void clipboardShortcutsFollowFocus() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    QString error;
+    QVERIFY(writeJson(storagePath("settings.json"), {{"shell", "/bin/sh"}},
+                      error));
+    Workbench window(dir.path());
+    window.show();
+    window.activateWindow();
+    auto *editor = window.findChild<EditorView *>();
+    QVERIFY(editor);
+    editor->setTextUtf8("Copy from the editor");
+    editor->selectAll();
+    editor->setFocus();
+    QTRY_COMPARE(QApplication::focusWidget(), editor->focusProxy());
+    QTest::keySequence(editor->focusProxy(), QKeySequence::Copy);
+    QCOMPARE(QApplication::clipboard()->text(), QString("Copy from the editor"));
+
+    window.findChild<QAction *>("view.terminal")->trigger();
+    auto *dock = window.findChild<QDockWidget *>("Terminal");
+    auto *terminal = dock->findChild<TerminalSession *>();
+    QVERIFY(terminal);
+    auto *copy = window.findChild<QAction *>("edit.copy");
+    QSignalSpy copied(copy, &QAction::triggered);
+    const auto copyFromTerminal = [&](QWidget *activeWindow, int count) {
+      activeWindow->activateWindow();
+      terminal->setFocus();
+      QTRY_VERIFY(terminal->isAncestorOf(QApplication::focusWidget()));
+      QVERIFY(copy->isEnabled());
+      QWidget *focus = QApplication::focusWidget();
+      QTest::keySequence(focus, QKeySequence::Copy);
+      QCOMPARE(copied.count(), count);
+    };
+    copyFromTerminal(&window, 1);
+    dock->setFloating(true);
+    copyFromTerminal(dock, 2);
+  }
+
   void sidebarAppearanceAndTerminal() {
     QTemporaryDir dir;
     qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());

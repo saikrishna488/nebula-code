@@ -9,6 +9,8 @@ Use a C++20 compiler, CMake 3.25 or newer, Ninja, and Qt 6.5 or newer with Widge
 ### macOS
 
 Install the Apple Command Line Tools and a Qt installation that matches your Mac's architecture.
+Use Qt 6.12.1 or newer for macOS builds to include the fix for an
+[accessibility crash in the Cocoa platform plugin](https://qt-project.atlassian.net/browse/QTBUG-149612).
 
 ```sh
 cmake --preset release

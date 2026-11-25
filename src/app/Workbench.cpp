@@ -467,6 +467,7 @@ void Workbench::setupCommands() {
   auto *edit = menuBar()->addMenu(tr("Edit"));
   auto *view = menuBar()->addMenu(tr("View"));
   auto *tools = menuBar()->addMenu(tr("Tools"));
+  auto *help = menuBar()->addMenu(tr("Help"));
   auto add = [&](QMenu *menu, const QString &id, const QString &title,
                  QKeySequence keys, std::function<void()> fn,
                  std::function<bool()> enabled = {}) {
@@ -474,6 +475,16 @@ void Workbench::setupCommands() {
         commands_.add(id, title, keys, std::move(fn), std::move(enabled)));
   };
   auto hasTab = [this] { return current() != nullptr; };
+  add(help, "help.credits", tr("Credits"), {}, [this] {
+    QMessageBox credits(QMessageBox::NoIcon, tr("Nebula Code Credits"),
+                        tr("Project owner — @saikrishna488\n"
+                           "Development assistance — Codex (GPT-6.2 Sol)"),
+                        QMessageBox::Ok, this);
+    credits.setTextFormat(Qt::PlainText);
+    credits.setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                    Qt::TextSelectableByKeyboard);
+    credits.exec();
+  });
   auto editorFocus = [this] {
     auto *w = QApplication::focusWidget();
     return current() && w &&
@@ -705,6 +716,7 @@ void Workbench::toggleTerminal() {
   }
   terminalDock_->show();
   terminal_->setFocus();
+  commands_.refresh();
 }
 QJsonObject Workbench::currentTheme() const {
   return loadTheme(theme_, settings_["themeOverrides"].toObject());
