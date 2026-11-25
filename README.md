@@ -53,7 +53,7 @@ cmake --preset release \
 cmake --build --preset release --parallel 4
 ```
 
-## Package for Intel macOS
+## Package for macOS
 
 Use Python 3.11 or newer and the Homebrew Qt toolchain from the Release build. Put the three pinned editor dependency archives in `build/vendor`. The packager also reads the corresponding Homebrew source archives and patches from the Homebrew download cache and `build/vendor`.
 
@@ -62,7 +62,7 @@ python3 scripts/package-macos.py
 open build/dist/NebulaCode.app
 ```
 
-`build/dist` contains the ad hoc signed app, its ZIP, and the corresponding source archive. To install from the ZIP, unzip it, move `NebulaCode.app` into Applications, and open it on an Intel Mac. The app includes dependency notices in `Contents/Resources/Notices`. The source archive includes Nebula's build files, pinned upstream archives, and the installed Homebrew recipes and patches.
+`build/dist` contains the ad hoc signed app, its architecture-specific ZIP, and the corresponding source archive. Choose the ZIP that matches your Mac (`x86_64` for Intel or `arm64` for Apple Silicon), unzip it, and move `NebulaCode.app` into Applications. The app includes dependency notices in `Contents/Resources/Notices`. The source archive includes Nebula's build files, pinned upstream archives, and the installed Homebrew recipes and patches.
 
 ## Editing
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the Release workbench on a local Intel Mac."""
+"""Measure the Release workbench on a local Mac."""
 import argparse
 import json
 import math

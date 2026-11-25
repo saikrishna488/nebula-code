@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble a relocatable Intel macOS app and its corresponding source."""
+"""Assemble a relocatable macOS app and its corresponding source."""
 import argparse
 import hashlib
 import os
@@ -86,12 +86,12 @@ def bundled_reference(app, binary, name):
     return "@executable_path/" + os.path.relpath(target, contents / "MacOS")
 
 
-def relocate_and_verify(app):
+def relocate_and_verify(app, architecture):
     binaries = list(bundle_binaries(app))
     for binary in binaries:
         architectures = run("/usr/bin/lipo", "-archs", binary, capture=True).strip()
-        if architectures != "x86_64":
-            raise RuntimeError(f"Expected Intel x86_64 in {binary.name}, found {architectures}")
+        if architecture not in architectures.split():
+            raise RuntimeError(f"Expected {architecture} in {binary.name}, found {architectures}")
         edits = []
         for command, name in load_commands(binary):
             if command == "LC_RPATH":
@@ -122,7 +122,7 @@ def relocate_and_verify(app):
         run("/usr/bin/codesign", "--force", "--sign", "-", framework, capture=True)
     run("/usr/bin/codesign", "--force", "--sign", "-", app, capture=True)
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", app)
-    print(f"Verified {len(binaries)} Intel Mach-O binaries and bundle-local linkage.", flush=True)
+    print(f"Verified {len(binaries)} {architecture} Mach-O binaries and bundle-local linkage.", flush=True)
 
 
 def brew_formulae(deployment_log):
@@ -154,7 +154,7 @@ def stage_dependency_sources(archive_dir, source, notices):
 def stage_project_source(source):
     project = source / "NebulaCode"
     project.mkdir()
-    for name in ("CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "plan.md", ".gitignore"):
+    for name in ("CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", ".gitignore"):
         shutil.copy2(ROOT / name, project)
     for name in ("cmake", "resources", "scripts", "src", "tests", "docs"):
         directory = ROOT / name
@@ -215,6 +215,9 @@ def main():
     if not macdeployqt:
         parser.error("macdeployqt was not found. Set --macdeployqt.")
     original = build / "NebulaCode.app"
+    architecture = run("/usr/bin/lipo", "-archs", original / "Contents/MacOS/NebulaCode", capture=True).strip()
+    if architecture not in {"x86_64", "arm64"}:
+        parser.error(f"expected a single x86_64 or arm64 executable, found {architecture}")
     with (original / "Contents/Info.plist").open("rb") as plist:
         version = plistlib.load(plist)["CFBundleShortVersionString"]
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -252,10 +255,10 @@ def main():
                 "--archive-dir", args.archive_dir.resolve(), source, *formulae)
         shutil.copytree(notices, resources / "Notices")
         shutil.copy2(ROOT / "LICENSE", resources / "Notices/NebulaCode.txt")
-        relocate_and_verify(app)
+        relocate_and_verify(app, architecture)
         smoke_test(app)
 
-        app_zip = package / f"NebulaCode-{version}-macos-x86_64.zip"
+        app_zip = package / f"NebulaCode-{version}-macos-{architecture}.zip"
         run("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, app_zip)
         source_archive = package / f"NebulaCode-{version}-source.tar.gz"
         with tarfile.open(source_archive, "w:gz", compresslevel=3) as archive:

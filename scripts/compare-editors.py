@@ -103,7 +103,10 @@ def main():
     if args.runs < 3 or args.settle <= 0:
         parser.error("use at least three runs and a positive settle time")
     editors = {"nebula": args.nebula.resolve(), "vscode": args.vscode.resolve()}
-    vscode_build = subprocess.check_output([str(editors["vscode"]), "--version"], text=True).splitlines()
+    vscode_app = editors["vscode"].parent / "resources" / "app"
+    vscode_package = json.loads((vscode_app / "package.json").read_text())
+    vscode_product = json.loads((vscode_app / "product.json").read_text())
+    vscode_build = {"version": vscode_package["version"], "commit": vscode_product.get("commit")}
     nebula_revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     cpu = next((line.partition(":")[2].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.machine())
