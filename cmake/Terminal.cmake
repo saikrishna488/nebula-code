@@ -39,6 +39,8 @@ target_compile_definitions(qtermwidget6 PRIVATE
 )
 if(APPLE)
     target_compile_definitions(qtermwidget6 PRIVATE HAVE_UTMPX UTMPX_COMPAT)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(qtermwidget6 PRIVATE HAVE_PTSNAME HAVE_GRANTPT HAVE_UNLOCKPT)
 endif()
 check_symbol_exists(updwtmpx "utmpx.h" NEBULA_HAVE_UPDWTMPX)
 if(NEBULA_HAVE_UPDWTMPX)

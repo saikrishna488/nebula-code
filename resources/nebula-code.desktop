@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nebula Code
+Comment=Edit source files and folders
+Exec=NebulaCode %f
+Icon=nebula-code
+Terminal=false
+Categories=Development;TextEditor;
+MimeType=text/plain;text/markdown;

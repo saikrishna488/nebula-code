@@ -1,0 +1,62 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            arch: x86_64
+          - runner: ubuntu-26.04-arm
+            arch: aarch64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-5compat-dev ninja-build clangd xvfb xauth xdotool desktop-file-utils
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install qt ninja
+      - name: Configure
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          if [ "$RUNNER_OS" = macOS ]; then
+            cmake --preset release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          else
+            cmake --preset release
+          fi
+      - run: cmake --build --preset release --parallel 3
+      - run: ctest --preset release
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Verify Linux installation
+        if: runner.os == 'Linux'
+        run: |
+          cmake --install build/release --prefix "$RUNNER_TEMP/nebula"
+          desktop-file-validate "$RUNNER_TEMP/nebula/share/applications/nebula-code.desktop"
+          file "$RUNNER_TEMP/nebula/bin/NebulaCode"
+          xvfb-run -a bash -euc '
+            "$1" "$2" &
+            pid=$!
+            trap "kill $pid" EXIT
+            timeout 20s xdotool search --sync --onlyvisible --pid "$pid" --name "README.md.*Nebula"
+          ' -- "$RUNNER_TEMP/nebula/bin/NebulaCode" "$PWD/README.md"
+      - name: Verify Apple Silicon bundle
+        if: runner.os == 'macOS'
+        run: |
+          app=build/release/NebulaCode.app
+          test "$(lipo -archs "$app/Contents/MacOS/NebulaCode")" = arm64
+          test -f "$app/Contents/Resources/NebulaCode.icns"
