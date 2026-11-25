@@ -141,6 +141,19 @@ xvfb-run -a --server-args="-screen 0 1280x800x24" python3 scripts/compare-editor
 
 The script alternates editor order and uses a fresh profile for every launch, with user extensions disabled in VS Code. It reports time from process launch to the first visible window titled for the input file, and process-tree proportional set size (PSS) five seconds later. The JSON includes raw samples, versions, and the host. The timing measures window visibility and does not measure typing latency.
 
+### Ubuntu 26.04 startup benchmark
+
+Median time to a visible document window over seven fresh launches per editor and file size. Both editors ran on the same GitHub-hosted runner for each architecture using Xvfb. Speedup is VS Code's median divided by Nebula's median.
+
+| Architecture | Plain-text file | Nebula 1.0.0 | VS Code 1.148.0 | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| x86-64 | 75 KB | 145 ms | 2.71 s | 18.7× |
+| x86-64 | 11.25 MB | 259 ms | 2.70 s | 10.4× |
+| ARM64 | 75 KB | 96 ms | 2.34 s | 24.4× |
+| ARM64 | 11.25 MB | 199 ms | 2.31 s | 11.6× |
+
+[GitHub Actions run and raw benchmark artifacts](https://github.com/saikrishna488/nebula-code/actions/runs/45656171484)
+
 ## License
 
 Nebula Code is distributed under the GNU General Public License version 3. The dependency versions and archive hashes are in [Editor.cmake](cmake/Editor.cmake) and [Terminal.cmake](cmake/Terminal.cmake). Each library retains its upstream license. See [LICENSE](LICENSE).
