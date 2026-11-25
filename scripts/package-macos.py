@@ -37,6 +37,10 @@ DEPENDENCIES = {
               ("AUTHORS", "LICENSE", "LICENSE.LGPL2+", "LICENSE.BSD-3-clause", "COPYING-CMAKE-SCRIPTS")),
     ),
 }
+QT_SDK_SOURCES = {
+    "qtbase": "cd837bb9fd631e20439a04eaa0c2f252f19ad92fdf5adf10229d0fbc2fab2d53",
+    "qt5compat": "32f47f68de1299d48faf02858be66fd708ee1273b1579e4fad474e7e728318b5",
+}
 
 
 def run(*args, capture=False):
@@ -92,6 +96,11 @@ def relocate_and_verify(app, architecture):
         architectures = run("/usr/bin/lipo", "-archs", binary, capture=True).strip()
         if architecture not in architectures.split():
             raise RuntimeError(f"Expected {architecture} in {binary.name}, found {architectures}")
+        if architectures != architecture:
+            thin = binary.with_name(binary.name + ".thin")
+            run("/usr/bin/lipo", binary, "-thin", architecture, "-output", thin)
+            thin.chmod(binary.stat().st_mode & 0o777)
+            thin.replace(binary)
         edits = []
         for command, name in load_commands(binary):
             if command == "LC_RPATH":
@@ -163,6 +172,25 @@ def stage_project_source(source):
                             ignore=shutil.ignore_patterns(".DS_Store", "__pycache__"))
 
 
+def stage_qt_sdk_source(archive_dir, source, notices):
+    for module, digest in QT_SDK_SOURCES.items():
+        path = archive_dir / f"{module}-everywhere-src-6.12.1.tar.xz"
+        with path.open("rb") as content:
+            if hashlib.file_digest(content, "sha256").hexdigest() != digest:
+                raise RuntimeError(f"Source archive checksum mismatch: {path}")
+        shutil.copy2(path, source / "upstream")
+        destination = notices / module
+        destination.mkdir()
+        with tarfile.open(path) as archive:
+            for member in archive:
+                parts = Path(member.name).parts
+                if member.isfile() and len(parts) == 3 and parts[1] == "LICENSES":
+                    with archive.extractfile(member) as license_file:
+                        (destination / parts[2]).write_bytes(license_file.read())
+        if not any(destination.iterdir()):
+            raise RuntimeError(f"No Qt license notices found in {path.name}")
+
+
 def smoke_test(app):
     with tempfile.TemporaryDirectory(prefix="nebula-clean-") as folder:
         clean = Path(folder).resolve()
@@ -206,6 +234,8 @@ def main():
     parser.add_argument("--archive-dir", type=Path, default=ROOT / "build/vendor")
     parser.add_argument("--output", type=Path, default=ROOT / "build/dist")
     parser.add_argument("--macdeployqt", default=shutil.which("macdeployqt"))
+    parser.add_argument("--include-qt-sdk-source", action="store_true",
+                        help="Include the Qt 6.12.1 SDK's pinned source archives")
     args = parser.parse_args()
     build = args.build_dir.resolve()
     output = args.output.resolve()
@@ -250,6 +280,8 @@ def main():
         notices.mkdir()
         stage_project_source(source)
         stage_dependency_sources(args.archive_dir.resolve(), source, notices)
+        if args.include_qt_sdk_source:
+            stage_qt_sdk_source(args.archive_dir.resolve(), source, notices)
         if formulae:
             run(sys.executable, ROOT / "scripts/brew-sources.py",
                 "--archive-dir", args.archive_dir.resolve(), source, *formulae)

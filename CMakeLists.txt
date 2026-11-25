@@ -53,5 +53,20 @@ if(NEBULA_BUILD_APP)
     install(FILES resources/nebula-code.desktop DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
     install(FILES resources/icons/NebulaCode.png
       DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps" RENAME nebula-code.png)
+    install(FILES LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/nebula-code")
+    install(FILES "${scintilla_SOURCE_DIR}/License.txt"
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/nebula-code" RENAME Scintilla.txt)
+    install(FILES "${lexilla_SOURCE_DIR}/License.txt"
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/nebula-code" RENAME Lexilla.txt)
+    install(FILES "${qtermwidget_SOURCE_DIR}/LICENSE.LGPL2+" "${qtermwidget_SOURCE_DIR}/LICENSE.BSD-3-clause"
+      DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/nebula-code")
+    set(CPACK_PACKAGE_NAME nebula-code)
+    set(CPACK_PACKAGE_CONTACT "Nebula Code <https://github.com/saikrishna488/nebula-code/issues>")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Native Qt code editor")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins")
+    set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "git, clangd")
+    include(CPack)
   endif()
 endif()

@@ -63,6 +63,21 @@ cmake --preset release \
 cmake --build --preset release --parallel 4
 ```
 
+## Install from GitHub
+
+Choose the package for your machine from [GitHub Releases](https://github.com/saikrishna488/nebula-code/releases).
+
+| Platform | Download |
+| --- | --- |
+| macOS, Apple Silicon | `*-macos-arm64.zip` |
+| macOS, Intel | `*-macos-x86_64.zip` |
+| Ubuntu 26.04, x86-64 | `nebula-code_*_amd64.deb` |
+| Ubuntu 26.04, ARM64 | `nebula-code_*_arm64.deb` |
+
+On macOS, unzip the download and move `NebulaCode.app` to Applications. The app is ad hoc signed, so macOS Gatekeeper can block a downloaded copy. On Ubuntu, run `sudo apt install ./<downloaded-file>.deb`.
+
+Publish a GitHub Release from a tag that contains the workflow. Actions builds and tests all four targets before attaching their packages and the corresponding macOS source archives. To build packages without publishing a release, run **Build and test** manually in the Actions tab and download the packages from the run's artifacts.
+
 ## Package for macOS
 
 Use Python 3.11 or newer and the Homebrew Qt toolchain from the Release build. Put the three pinned editor dependency archives in `build/vendor`. The packager also reads the corresponding Homebrew source archives and patches from the Homebrew download cache and `build/vendor`.

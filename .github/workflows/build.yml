@@ -3,6 +3,9 @@ name: Build and test
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -19,6 +22,8 @@ jobs:
             arch: aarch64
           - runner: macos-15
             arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -29,12 +34,30 @@ jobs:
           sudo apt-get install -y qt6-base-dev qt6-5compat-dev ninja-build clangd xvfb xauth xdotool desktop-file-utils
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install qt ninja
+        run: |
+          brew install ninja
+          qt_prefix="$RUNNER_TEMP/qt"
+          mkdir -p "$qt_prefix"
+          repository=https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6121/qt6_6121
+          build=6.12.1-0-202611180803
+          suffix=MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z
+          curl -fL --retry 3 "$repository/qt.qt6.6121.clang_64/${build}qtbase-$suffix" -o "$RUNNER_TEMP/qtbase.7z"
+          curl -fL --retry 3 "$repository/qt.qt6.6121.addons.qt5compat.clang_64/${build}qt5compat-$suffix" -o "$RUNNER_TEMP/qt5compat.7z"
+          (
+            cd "$RUNNER_TEMP"
+            shasum -a 256 -c <<'EOF'
+          e62976c77ce878b1aa04eac204a5e77eafe08cba7aae7fbf545f00b7df12978c  qtbase.7z
+          af6a3e928296e36b285a6b200fe77047a2d286598f2314c604401f3a9d10eae4  qt5compat.7z
+          EOF
+          )
+          tar -xf "$RUNNER_TEMP/qtbase.7z" -C "$qt_prefix"
+          tar -xf "$RUNNER_TEMP/qt5compat.7z" -C "$qt_prefix"
+          echo "NEBULA_QT_PREFIX=$qt_prefix" >> "$GITHUB_ENV"
       - name: Configure
         run: |
           test "$(uname -m)" = "${{ matrix.arch }}"
           if [ "$RUNNER_OS" = macOS ]; then
-            cmake --preset release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+            cmake --preset release -DCMAKE_PREFIX_PATH="$NEBULA_QT_PREFIX" -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}"
           else
             cmake --preset release
           fi
@@ -48,18 +71,60 @@ jobs:
           cmake --install build/release --prefix "$RUNNER_TEMP/nebula"
           desktop-file-validate "$RUNNER_TEMP/nebula/share/applications/nebula-code.desktop"
           file "$RUNNER_TEMP/nebula/bin/NebulaCode"
+      - name: Build and install Ubuntu package
+        if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || github.event_name == 'release')
+        run: |
+          sudo apt-get install -y dpkg-dev
+          cpack --config build/release/CPackConfig.cmake -G DEB -B "$RUNNER_TEMP/packages"
+          package=$(find "$RUNNER_TEMP/packages" -maxdepth 1 -name '*.deb')
+          test "$(dpkg-deb -f "$package" Architecture)" = "$(dpkg --print-architecture)"
+          sudo apt-get install -y "$package"
+          test -x /usr/bin/NebulaCode
+      - name: Launch Linux app
+        if: runner.os == 'Linux'
+        run: |
+          app="$RUNNER_TEMP/nebula/bin/NebulaCode"
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "${{ github.event_name }}" = release ]; then
+            app=/usr/bin/NebulaCode
+          fi
           xvfb-run -a bash -euc '
             "$1" "$2" &
             pid=$!
             trap "kill $pid" EXIT
             timeout 20s xdotool search --sync --all --onlyvisible --pid "$pid" --name "README[.]md.*Nebula"
-          ' -- "$RUNNER_TEMP/nebula/bin/NebulaCode" "$PWD/README.md"
-      - name: Verify Apple Silicon bundle
+          ' -- "$app" "$PWD/README.md"
+      - name: Verify macOS bundle
         if: runner.os == 'macOS'
         run: |
           app=build/release/NebulaCode.app
-          test "$(lipo -archs "$app/Contents/MacOS/NebulaCode")" = arm64
+          test "$(lipo -archs "$app/Contents/MacOS/NebulaCode")" = "${{ matrix.arch }}"
           test -f "$app/Contents/Resources/NebulaCode.icns"
+      - name: Package macOS app
+        if: runner.os == 'macOS' && (github.event_name == 'workflow_dispatch' || github.event_name == 'release')
+        run: |
+          mkdir -p build/vendor
+          curl -fL --retry 3 https://www.scintilla.org/scintilla569.tgz -o build/vendor/scintilla569.tgz
+          curl -fL --retry 3 https://www.scintilla.org/lexilla555.tgz -o build/vendor/lexilla555.tgz
+          curl -fL --retry 3 https://github.com/lxqt/qtermwidget/releases/download/2.4.0/qtermwidget-2.4.0.tar.xz -o build/vendor/qtermwidget-2.4.0.tar.xz
+          qt_sources=https://download.qt.io/official_releases/qt/6.12/6.12.1/submodules
+          for module in qtbase qt5compat; do
+            archive="$module-everywhere-src-6.12.1.tar.xz"
+            curl -fL --retry 3 "$qt_sources/$archive" -o "build/vendor/$archive"
+          done
+          python3 scripts/package-macos.py --include-qt-sdk-source \
+            --macdeployqt "$NEBULA_QT_PREFIX/bin/macdeployqt" --output "$RUNNER_TEMP/packages"
+          for source in "$RUNNER_TEMP"/packages/*-source.tar.gz; do
+            mv "$source" "${source%-source.tar.gz}-macos-${{ matrix.arch }}-source.tar.gz"
+          done
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+        with:
+          name: packages-${{ runner.os }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/packages/*.deb
+            ${{ runner.temp }}/packages/*.zip
+            ${{ runner.temp }}/packages/*-source.tar.gz
+          if-no-files-found: error
       - name: Compare against VS Code
         if: runner.os == 'Linux' && github.event_name == 'push'
         run: |
@@ -77,3 +142,21 @@ jobs:
           name: editor-comparison-${{ matrix.arch }}
           path: ${{ runner.temp }}/editor-comparison.json
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'release'
+    needs: native
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: packages
+          merge-multiple: true
+      - name: Attach packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload --repo "$GITHUB_REPOSITORY" -- "$RELEASE_TAG" packages/*
