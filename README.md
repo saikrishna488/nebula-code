@@ -1,10 +1,14 @@
 # Nebula Code
 
-Nebula Code is an offline-first Qt Widgets editor for Intel macOS. Each window contains a folder explorer, tabbed Scintilla editors, and an optional interactive terminal. A split shares its document and undo history with the original view. Each view keeps its own cursor and scroll position.
+Nebula Code is an offline-first Qt Widgets editor for macOS (Intel and Apple Silicon) and Linux (x86-64 and ARM64). Each window contains a folder explorer, tabbed Scintilla editors, and an optional interactive terminal. A split shares its document and undo history with the original view. Each view keeps its own cursor and scroll position.
 
 ## Build and run
 
-Install the Apple Command Line Tools, CMake 3.25 or newer, Ninja, and Qt 6 with Widgets, Core5Compat, and Test. The reference build uses macOS 15.8.3 x86_64, SDK 15.5, Apple Clang 17, Qt 6.12.0, CMake 4.5.0, and Ninja 1.13.2.
+Use a C++20 compiler, CMake 3.25 or newer, Ninja, and Qt 6.5 or newer with Widgets, Core5Compat, and Test. The Release preset uses the host architecture. Use an empty build directory when switching compilers or architectures.
+
+### macOS
+
+Install the Apple Command Line Tools and a Qt installation that matches your Mac's architecture.
 
 ```sh
 cmake --preset release
@@ -18,6 +22,26 @@ Open a specific workspace or file directly from a shell.
 ```sh
 build/release/NebulaCode.app/Contents/MacOS/NebulaCode /path/to/project
 ```
+
+### Linux
+
+On Ubuntu 26.04, install the build dependencies and then build, test, and launch Nebula.
+
+```sh
+sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-5compat-dev clangd
+cmake --preset release
+cmake --build --preset release --parallel 4
+QT_QPA_PLATFORM=offscreen ctest --preset release
+build/release/NebulaCode /path/to/project
+```
+
+To add Nebula to the desktop application menu, install it under a prefix whose `bin` directory is in your desktop session's `PATH`. The standard system prefix is `/usr/local`.
+
+```sh
+sudo cmake --install build/release --prefix /usr/local
+```
+
+### Offline builds
 
 The first configure downloads Scintilla 5.6.9, Lexilla 5.5.5, and QTermWidget 2.4.0. To build offline, supply copies of the pinned upstream archives. CMake checks their SHA-256 digests.
 
@@ -107,6 +131,15 @@ ctest --preset workspace-tests
 ```
 
 Run `python3 scripts/benchmark.py` after a Release build to measure fresh launches, RSS, idle CPU, file opening, and key-to-paint latency on the current Mac.
+
+On Linux, use the head-to-head benchmark with the VS Code GUI executable. Install `xvfb`, `xauth`, and `xdotool` to run it on a virtual X11 display. If Chromium restricts access to a sandbox process's memory counters, the benchmark uses noninteractive sudo to read that process's PSS.
+
+```sh
+xvfb-run -a --server-args="-screen 0 1280x800x24" python3 scripts/compare-editors.py \
+  build/release/NebulaCode /usr/share/code/code
+```
+
+The script alternates editor order and uses a fresh profile for every launch, with user extensions disabled in VS Code. It reports time from process launch to the first visible window titled for the input file, and process-tree proportional set size (PSS) five seconds later. The JSON includes raw samples, versions, and the host. The timing measures window visibility and does not measure typing latency.
 
 ## License
 

@@ -60,3 +60,20 @@ jobs:
           app=build/release/NebulaCode.app
           test "$(lipo -archs "$app/Contents/MacOS/NebulaCode")" = arm64
           test -f "$app/Contents/Resources/NebulaCode.icns"
+      - name: Compare against VS Code
+        if: runner.os == 'Linux' && github.event_name == 'push'
+        run: |
+          case "$(uname -m)" in
+            x86_64) code_arch=x64 ;;
+            aarch64) code_arch=arm64 ;;
+          esac
+          curl --fail --location --retry 3 "https://update.code.visualstudio.com/latest/linux-deb-$code_arch/stable" -o "$RUNNER_TEMP/vscode.deb"
+          sudo apt-get install -y "$RUNNER_TEMP/vscode.deb"
+          xvfb-run -a --server-args="-screen 0 1280x800x24" python3 scripts/compare-editors.py \
+            "$RUNNER_TEMP/nebula/bin/NebulaCode" /usr/share/code/code | tee "$RUNNER_TEMP/editor-comparison.json"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && github.event_name == 'push'
+        with:
+          name: editor-comparison-${{ matrix.arch }}
+          path: ${{ runner.temp }}/editor-comparison.json
+          if-no-files-found: error
