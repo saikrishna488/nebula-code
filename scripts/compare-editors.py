@@ -54,6 +54,20 @@ def editor_process(command, env, log):
                 proc.wait(timeout=5)
 
 
+def wait_for_document_window(proc, document, start):
+    # xdotool search --sync polls at a coarse interval that masks fast launches.
+    command = ["xdotool", "search", "--onlyvisible", "--pid", str(proc.pid),
+               "--name", re.escape(document.name)]
+    while time.monotonic() - start < 35:
+        if proc.poll() is not None:
+            raise OSError(f"editor exited with status {proc.returncode}")
+        search = subprocess.run(command, stdout=subprocess.DEVNULL, timeout=2)
+        if search.returncode == 0:
+            return (time.monotonic() - start) * 1000
+        time.sleep(0.01)
+    raise TimeoutError("the document window did not appear within 35 seconds")
+
+
 def sample(binary, editor, document, settle):
     with tempfile.TemporaryDirectory(prefix=f"editor-bench-{editor}-") as directory:
         profile = Path(directory)
@@ -78,10 +92,7 @@ def sample(binary, editor, document, settle):
             start = time.monotonic()
             with editor_process(command, env, log) as proc:
                 try:
-                    subprocess.run(["xdotool", "search", "--sync", "--onlyvisible", "--pid",
-                                    str(proc.pid), "--name", re.escape(document.name)],
-                                   check=True, timeout=35, stdout=subprocess.DEVNULL)
-                    visible_ms = (time.monotonic() - start) * 1000
+                    visible_ms = wait_for_document_window(proc, document, start)
                     time.sleep(settle)
                     pss = process_tree_pss(proc.pid)
                 except (subprocess.SubprocessError, OSError) as error:
