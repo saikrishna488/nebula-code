@@ -56,7 +56,7 @@ def editor_process(command, env, log):
 
 def wait_for_document_window(proc, document, start):
     # xdotool search --sync polls at a coarse interval that masks fast launches.
-    command = ["xdotool", "search", "--onlyvisible", "--pid", str(proc.pid),
+    command = ["xdotool", "search", "--all", "--onlyvisible", "--pid", str(proc.pid),
                "--name", re.escape(document.name)]
     while time.monotonic() - start < 35:
         if proc.poll() is not None:

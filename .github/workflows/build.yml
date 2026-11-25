@@ -52,7 +52,7 @@ jobs:
             "$1" "$2" &
             pid=$!
             trap "kill $pid" EXIT
-            timeout 20s xdotool search --sync --onlyvisible --pid "$pid" --name "README.md.*Nebula"
+            timeout 20s xdotool search --sync --all --onlyvisible --pid "$pid" --name "README[.]md.*Nebula"
           ' -- "$RUNNER_TEMP/nebula/bin/NebulaCode" "$PWD/README.md"
       - name: Verify Apple Silicon bundle
         if: runner.os == 'macOS'
