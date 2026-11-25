@@ -1,0 +1,9 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {"name":"release","displayName":"Intel macOS Release","generator":"Ninja","binaryDir":"${sourceDir}/build/release","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","CMAKE_OSX_ARCHITECTURES":"x86_64","BUILD_TESTING":"ON"}},
+    {"name":"workspace-tests","inherits":"release","binaryDir":"${sourceDir}/build/workspace","cacheVariables":{"NEBULA_BUILD_APP":"OFF"}}
+  ],
+  "buildPresets":[{"name":"release","configurePreset":"release"},{"name":"workspace-tests","configurePreset":"workspace-tests"}],
+  "testPresets":[{"name":"release","configurePreset":"release","output":{"outputOnFailure":true}},{"name":"workspace-tests","configurePreset":"workspace-tests","output":{"outputOnFailure":true}}]
+}
