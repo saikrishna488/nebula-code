@@ -20,6 +20,7 @@ private slots:
     void sharedDocumentAndMultiCaretUndo();
     void syntaxAndFolding();
     void markdownSyntax();
+    void additionalLanguagesAndSearchFlags();
     void findAndReplace();
     void largeFileRemainsEditable();
     void shortDocumentMinimap();
@@ -123,6 +124,39 @@ void EditorViewTest::markdownSyntax()
     QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_MARKDOWN});
     view.setLanguageForPath(QStringLiteral("guide.txt"));
     QCOMPARE(scintilla->send(SCI_GETSTYLEAT, 0), sptr_t{SCE_MARKDOWN_DEFAULT});
+}
+
+void EditorViewTest::additionalLanguagesAndSearchFlags()
+{
+    EditorView view;
+    auto *scintilla = view.findChild<ScintillaEditBase *>();
+
+    view.setLanguageForPath(QStringLiteral("config.yaml"));
+    view.setTextUtf8("enabled: true # comment\n");
+    scintilla->send(SCI_COLOURISE, 0, -1);
+    QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_YAML});
+    QCOMPARE(scintilla->send(SCI_GETSTYLEAT, view.textUtf8().indexOf("comment")), sptr_t{SCE_YAML_COMMENT});
+
+    view.setLanguageForPath(QStringLiteral("main.rs"));
+    view.setTextUtf8("fn main() { let x = 7; }\n");
+    scintilla->send(SCI_COLOURISE, 0, -1);
+    QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_RUST});
+    QCOMPARE(scintilla->send(SCI_GETSTYLEAT, 0), sptr_t{SCE_RUST_WORD});
+
+    view.setLanguageForPath(QStringLiteral("index.html"));
+    QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_HTML});
+    view.setLanguageForPath(QStringLiteral("styles.css"));
+    QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_CSS});
+    view.setLanguageForPath(QStringLiteral("patch.diff"));
+    QCOMPARE(scintilla->send(SCI_GETLEXER), sptr_t{SCLEX_DIFF});
+
+    view.setLanguageForPath(QStringLiteral("plain.txt"));
+    view.setTextUtf8("foo foobar Foo\n");
+    view.setCursorPosition(0);
+    QVERIFY(view.findNext(QStringLiteral("foo"), false, true, true));
+    QCOMPARE(view.cursorPosition(), qsizetype{3});
+    QCOMPARE(view.replaceAll(QStringLiteral("foo"), QStringLiteral("baz"), true, true), qsizetype{1});
+    QCOMPARE(view.textUtf8(), QByteArray("baz foobar Foo\n"));
 }
 
 void EditorViewTest::findAndReplace()

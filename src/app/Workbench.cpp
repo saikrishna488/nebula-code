@@ -3,6 +3,7 @@
 #include "AppearanceDialog.h"
 #include "Sidebar.h"
 #include "Theme.h"
+#include "WorkspaceSearch.h"
 #include "editor/EditorView.h"
 #include "lsp/LspClient.h"
 #include "lsp/LspPanel.h"
@@ -10,6 +11,7 @@
 #include "terminal/TerminalSession.h"
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QCryptographicHash>
 #include <QDir>
@@ -104,6 +106,17 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   terminalDock_->installEventFilter(this);
   findDock_ = dock(tr("Find and Replace"), Qt::BottomDockWidgetArea, nullptr);
   findDock_->hide();
+  findInFiles_ = new FindInFilesPanel;
+  findInFiles_->setRoot(root_);
+  searchDock_ = dock(tr("Find in Files"), Qt::BottomDockWidgetArea, findInFiles_);
+  searchDock_->hide();
+  connect(findInFiles_, &FindInFilesPanel::matchActivated, this,
+          [this](const QString &path, int line, int column) {
+            if (!openFile(path) || !current())
+              return;
+            current()->active->goToLineColumn(line, column);
+            current()->active->setFocus();
+          });
   lsp_ = new LspClient(this);
   if (!settings_["clangd"].toString().isEmpty())
     lsp_->setExecutable(settings_["clangd"].toString());
@@ -244,6 +257,8 @@ bool Workbench::switchWorkspace(const QString &path) {
   rememberWorkspace_ = true;
   lsp_->setWorkspace(root_);
   language_->clear();
+  findInFiles_->setRoot(root_);
+  searchDock_->hide();
   sidebar_->setWorkspace(root_);
   activity_->setActiveView(sidebar_->isHidden() ? QString{} : "view.explorer");
   restoreSession(false);
@@ -713,8 +728,23 @@ void Workbench::setupCommands() {
   action("edit.fold", tr("Toggle Fold"), QKeySequence("Ctrl+Alt+["),
          &EditorView::toggleFold);
   add(
+      file, "workspace.quickOpen", tr("Quick Open…"), QKeySequence("Ctrl+P"),
+      [this] {
+        const QString path = quickOpenFile(this, root_);
+        if (!path.isEmpty())
+          openFile(path);
+      },
+      [this] { return !root_.isEmpty(); });
+  add(
       edit, "edit.find", tr("Find and Replace"), QKeySequence::Find,
       [this] { showFind(); }, hasTab);
+  add(
+      edit, "edit.gotoLine", tr("Go to Line…"), QKeySequence("Ctrl+G"),
+      [this] { goToLine(); }, hasTab);
+  add(
+      edit, "workspace.findInFiles", tr("Find in Files…"),
+      QKeySequence("Ctrl+Shift+F"), [this] { showFindInFiles(); },
+      [this] { return !root_.isEmpty(); });
   add(view, "view.palette", tr("Command Palette…"),
       QKeySequence("Ctrl+Shift+P"), [this] { commands_.palette(); });
   add(
@@ -789,31 +819,43 @@ void Workbench::showFind() {
     auto *row = new QHBoxLayout(bar);
     auto *find = new QLineEdit;
     auto *replace = new QLineEdit;
+    auto *matchCase = new QCheckBox(tr("Match Case"));
+    auto *wholeWord = new QCheckBox(tr("Whole Word"));
     find->setPlaceholderText(tr("Find"));
     replace->setPlaceholderText(tr("Replace with"));
+    matchCase->setObjectName(QStringLiteral("findMatchCase"));
+    wholeWord->setObjectName(QStringLiteral("findWholeWord"));
     row->addWidget(find);
     row->addWidget(replace);
+    row->addWidget(matchCase);
+    row->addWidget(wholeWord);
     auto button = [&](const QString &name, std::function<void()> fn) {
       auto *b = new QPushButton(name);
       row->addWidget(b);
       connect(b, &QPushButton::clicked, this, fn);
     };
-    auto search = [this, find](bool backward) {
-      if (current() && !current()->active->findNext(find->text(), backward))
+    auto search = [this, find, matchCase, wholeWord](bool backward) {
+      if (current() &&
+          !current()->active->findNext(find->text(), backward,
+                                       matchCase->isChecked(),
+                                       wholeWord->isChecked()))
         report(tr("No match"));
     };
     connect(find, &QLineEdit::returnPressed, this, [search] { search(false); });
     button(tr("Previous"), [search] { search(true); });
     button(tr("Next"), [search] { search(false); });
-    button(tr("Replace"), [this, find, replace] {
+    button(tr("Replace"), [this, find, replace, matchCase, wholeWord] {
       if (current())
-        current()->active->replaceCurrent(find->text(), replace->text());
+        current()->active->replaceCurrent(find->text(), replace->text(),
+                                          matchCase->isChecked(),
+                                          wholeWord->isChecked());
     });
-    button(tr("Replace All"), [this, find, replace] {
+    button(tr("Replace All"), [this, find, replace, matchCase, wholeWord] {
       if (current())
         report(tr("%1 replacements")
-                   .arg(current()->active->replaceAll(find->text(),
-                                                      replace->text())));
+                   .arg(current()->active->replaceAll(
+                       find->text(), replace->text(), matchCase->isChecked(),
+                       wholeWord->isChecked())));
     });
     findDock_->setWidget(bar);
   }
@@ -821,6 +863,35 @@ void Workbench::showFind() {
   auto *field = findDock_->findChild<QLineEdit *>();
   field->setFocus();
   field->selectAll();
+}
+void Workbench::showFindInFiles() {
+  searchDock_->show();
+  searchDock_->raise();
+  findInFiles_->focusQuery();
+}
+void Workbench::goToLine() {
+  if (!current())
+    return;
+  auto *view = current()->active;
+  const QString initial = QStringLiteral("%1:%2")
+                              .arg(view->cursorLine() + 1)
+                              .arg(view->cursorColumn() + 1);
+  bool ok = false;
+  const QString input = QInputDialog::getText(
+      this, tr("Go to Line"), tr("Line or line:column:"), QLineEdit::Normal,
+      initial, &ok);
+  if (!ok || input.trimmed().isEmpty())
+    return;
+  const QStringList parts = input.trimmed().split(':');
+  bool lineOk = false;
+  const qsizetype line = parts.value(0).toLongLong(&lineOk);
+  if (!lineOk || line < 1)
+    return;
+  bool colOk = false;
+  const qsizetype column =
+      parts.size() > 1 ? parts.value(1).toLongLong(&colOk) : 1;
+  view->goToLineColumn(line - 1, colOk && column >= 1 ? column - 1 : 0);
+  view->setFocus();
 }
 void Workbench::toggleTerminal() {
   if (terminalDock_->isVisible()) {

@@ -91,7 +91,7 @@ open build/dist/NebulaCode.app
 
 ## Editing
 
-Use **File → Open Folder** or **Open Recent Folder** to switch workspaces in the current window. Nebula prompts for unsaved edits and restores the selected folder’s tabs and splits. Use the left activity bar to switch between Explorer and Source Control, find text in the current document, open the terminal, or open Settings. The **View** menu controls the split, minimap, terminal, theme, and source control panel. Search commands by name with **⌘⇧P**. **⌘D** selects the next occurrence for simultaneous editing. **⌘F** opens find and replace.
+Use **File → Open Folder** or **Open Recent Folder** to switch workspaces in the current window. Nebula prompts for unsaved edits and restores the selected folder’s tabs and splits. Use **⌘P** for Quick Open to jump to any workspace file, **Ctrl+G** for Go to Line (`line` or `line:column`), and **⌘⇧F** for Find in Files. Use the left activity bar to switch between Explorer and Source Control, find text in the current document, open the terminal, or open Settings. The **View** menu controls the split, minimap, terminal, theme, and source control panel. Search commands by name with **⌘⇧P**. **⌘D** selects the next occurrence for simultaneous editing. **⌘F** opens find and replace with Match Case and Whole Word options.
 
 Right-click a tab to choose **Split Left**, **Split Right**, **Move to New Window**, or **Close Tab**. Moving a tab keeps its unsaved edits, undo history, and split views.
 
@@ -99,7 +99,7 @@ Right-click a tab to choose **Split Left**, **Split Right**, **Move to New Windo
 
 Files use UTF-8. Saving preserves existing BOMs and line endings, checks for changes since the file was loaded, and atomically replaces the target. **File → Reload from Disk** reads the latest contents. Closing a modified tab offers to save or discard its edits. The main workspace window records its file tabs, active document, split sizes, and cursor positions for the next session.
 
-Open or save Markdown documents with the `.md` or `.markdown` extension for highlighting of headings, emphasis, links, lists, quotes, and code.
+Open or save Markdown documents with the `.md` or `.markdown` extension for highlighting of headings, emphasis, links, lists, quotes, and code. Nebula also highlights C/C++, Python, JSON, Bash/Zsh, CMake, YAML, Rust, HTML/XML, CSS, and Diff/Patch files.
 
 The terminal opens in the workspace directory and docks at the bottom by default. Use the terminal title-bar menu to dock it at the top, right, bottom, or left. Nebula remembers the workspace's dock position. Drag the divider to resize. Hiding the panel keeps the session alive. Closing the panel or exiting its shell ends the session. The terminal retains up to 5,000 lines of history.
 

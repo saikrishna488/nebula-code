@@ -15,6 +15,8 @@
 #include <QTreeView>
 #include <QPushButton>
 #include <QInputDialog>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QSpinBox>
@@ -457,6 +459,82 @@ private slots:
     QVERIFY(tab->secondary);
     QCOMPARE(tab->primary->cursorPosition(), 1);
     QCOMPARE(tab->secondary->cursorPosition(), 3);
+  }
+
+  void quickOpenGoToLineAndFindInFiles() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    const QString root = dir.filePath("repo");
+    QVERIFY(QDir().mkpath(root + "/sub"));
+
+    {
+      QFile a(root + "/alpha.cpp");
+      QVERIFY(a.open(QIODevice::WriteOnly));
+      a.write("int alpha = 1;\nint alphabet = 2;\n");
+    }
+    {
+      QFile b(root + "/sub/beta.rs");
+      QVERIFY(b.open(QIODevice::WriteOnly));
+      b.write("fn beta() {\n    let x = 42;\n}\n");
+    }
+
+    Workbench window(root);
+    window.show();
+
+    auto *quickOpen = window.findChild<QAction *>("workspace.quickOpen");
+    QVERIFY(quickOpen);
+    QTimer::singleShot(0, &window, [] {
+      auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      auto *query = dialog->findChild<QLineEdit *>();
+      QVERIFY(query);
+      query->setText("beta");
+      dialog->accept();
+    });
+    quickOpen->trigger();
+
+    auto *tabs = window.findChild<QTabWidget *>();
+    QTRY_COMPARE(tabs->count(), 1);
+    auto *tab = static_cast<DocumentTab *>(tabs->currentWidget());
+    QVERIFY(tab->file.path.endsWith("/sub/beta.rs"));
+
+    auto *gotoLine = window.findChild<QAction *>("edit.gotoLine");
+    QVERIFY(gotoLine);
+    QTimer::singleShot(0, &window, [] {
+      auto *dialog =
+          qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialog->setTextValue("2:9");
+      dialog->accept();
+    });
+    gotoLine->trigger();
+    QCOMPARE(tab->active->cursorLine(), qsizetype{1});
+    QCOMPARE(tab->active->cursorColumn(), qsizetype{8});
+
+    auto *findInFiles = window.findChild<QAction *>("workspace.findInFiles");
+    QVERIFY(findInFiles);
+    findInFiles->trigger();
+    auto *dock = window.findChild<QDockWidget *>("Find in Files");
+    QVERIFY(dock && dock->isVisible());
+    auto *query = dock->findChild<QLineEdit *>("findInFilesQuery");
+    auto *results = dock->findChild<QListWidget *>("findInFilesResults");
+    QVERIFY(query && results);
+    for (auto *box : dock->findChildren<QCheckBox *>()) {
+      if (box->text() == "Whole Word")
+        box->setChecked(true);
+    }
+    query->setText("alpha");
+    QMetaObject::invokeMethod(query, "returnPressed");
+    QTRY_COMPARE(results->count(), 1);
+    QVERIFY(results->item(0)->text().contains("alpha.cpp:1:"));
+    QMetaObject::invokeMethod(results, "itemActivated",
+                              Q_ARG(QListWidgetItem *, results->item(0)));
+    QTRY_COMPARE(tabs->count(), 2);
+    tab = static_cast<DocumentTab *>(tabs->currentWidget());
+    QVERIFY(tab->file.path.endsWith("/alpha.cpp"));
+    QCOMPARE(tab->active->cursorLine(), qsizetype{0});
+    QCOMPARE(tab->active->cursorColumn(), qsizetype{4});
   }
 };
 QTEST_MAIN(WorkbenchTest)

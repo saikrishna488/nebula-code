@@ -17,6 +17,7 @@ class Sidebar;
 class ActivityBar;
 class LspClient;
 class LspPanel;
+class FindInFilesPanel;
 class TerminalSession;
 class DocumentTab : public QSplitter {
 public:
@@ -67,6 +68,8 @@ private:
                         const QJsonObject &overrides);
   QJsonObject currentTheme() const;
   void showFind();
+  void showFindInFiles();
+  void goToLine();
   void toggleTerminal();
   void updateLanguage(DocumentTab *tab);
   enum class LanguageAction { Completion, Definition, References };
@@ -87,10 +90,12 @@ private:
   ActivityBar *activity_;
   QDockWidget *languageDock_;
   QDockWidget *findDock_;
+  QDockWidget *searchDock_;
   TerminalSession *terminal_ = nullptr;
 
   LspClient *lsp_;
   LspPanel *language_;
+  FindInFilesPanel *findInFiles_;
   bool minimap_ = true;
   bool rememberWorkspace_ = true;
 };

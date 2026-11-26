@@ -307,6 +307,24 @@ void EditorView::setLanguageForPath(const QString &path)
     } else if (suffix == QStringLiteral("cmake") || name == QStringLiteral("cmakelists.txt")) {
         language = "cmake";
         languageId = SCLEX_CMAKE;
+    } else if (suffix == QStringLiteral("yml") || suffix == QStringLiteral("yaml")) {
+        language = "yaml";
+        languageId = SCLEX_YAML;
+    } else if (suffix == QStringLiteral("rs")) {
+        language = "rust";
+        languageId = SCLEX_RUST;
+    } else if (suffix == QStringLiteral("html") || suffix == QStringLiteral("htm")) {
+        language = "hypertext";
+        languageId = SCLEX_HTML;
+    } else if (suffix == QStringLiteral("xml") || suffix == QStringLiteral("svg")) {
+        language = "xml";
+        languageId = SCLEX_XML;
+    } else if (suffix == QStringLiteral("css")) {
+        language = "css";
+        languageId = SCLEX_CSS;
+    } else if (suffix == QStringLiteral("diff") || suffix == QStringLiteral("patch")) {
+        language = "diff";
+        languageId = SCLEX_DIFF;
     }
 
     if (editor_->send(SCI_GETLENGTH) > syntaxLimit) {
@@ -346,6 +364,13 @@ void EditorView::setLanguageForPath(const QString &path)
                            "find_program get_property include install list message option project set set_property "
                            "string target_compile_definitions target_compile_features target_compile_options "
                            "target_include_directories target_link_libraries target_sources unset");
+        } else if (lexerId == SCLEX_YAML) {
+            editor_->sends(SCI_SETKEYWORDS, 0, "false no null off on true yes");
+        } else if (lexerId == SCLEX_RUST) {
+            editor_->sends(SCI_SETKEYWORDS, 0,
+                           "as async await break const continue crate dyn else enum extern false fn for if impl in "
+                           "let loop match mod move mut pub ref return self Self static struct super trait true type "
+                           "unsafe use where while");
         }
     }
     setTheme(theme_);
@@ -452,6 +477,50 @@ void EditorView::setTheme(const EditorTheme &theme)
         setForegrounds(editor_, theme.number, {SCE_CMAKE_NUMBER});
         setForegrounds(editor_, theme.preprocessor, {SCE_CMAKE_VARIABLE, SCE_CMAKE_STRINGVAR});
         break;
+    case SCLEX_YAML:
+        setForegrounds(editor_, theme.keyword, {SCE_YAML_KEYWORD, SCE_YAML_DOCUMENT});
+        setForegrounds(editor_, theme.string, {SCE_YAML_TEXT});
+        setForegrounds(editor_, theme.comment, {SCE_YAML_COMMENT});
+        setForegrounds(editor_, theme.number, {SCE_YAML_NUMBER});
+        setForegrounds(editor_, theme.preprocessor, {SCE_YAML_IDENTIFIER, SCE_YAML_REFERENCE});
+        break;
+    case SCLEX_RUST:
+        setForegrounds(editor_, theme.keyword,
+                       {SCE_RUST_WORD, SCE_RUST_WORD2, SCE_RUST_WORD3, SCE_RUST_WORD4, SCE_RUST_WORD5,
+                        SCE_RUST_WORD6, SCE_RUST_WORD7});
+        setForegrounds(editor_, theme.string,
+                       {SCE_RUST_STRING, SCE_RUST_STRINGR, SCE_RUST_CHARACTER, SCE_RUST_BYTESTRING,
+                        SCE_RUST_BYTESTRINGR, SCE_RUST_BYTECHARACTER, SCE_RUST_CSTRING, SCE_RUST_CSTRINGR});
+        setForegrounds(editor_, theme.comment,
+                       {SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTBLOCKDOC,
+                        SCE_RUST_COMMENTLINEDOC});
+        setForegrounds(editor_, theme.number, {SCE_RUST_NUMBER});
+        setForegrounds(editor_, theme.preprocessor, {SCE_RUST_MACRO, SCE_RUST_LIFETIME});
+        break;
+    case SCLEX_HTML:
+    case SCLEX_XML:
+        setForegrounds(editor_, theme.keyword, {SCE_H_TAG, SCE_H_TAGUNKNOWN, SCE_H_TAGEND});
+        setForegrounds(editor_, theme.string, {SCE_H_DOUBLESTRING, SCE_H_SINGLESTRING});
+        setForegrounds(editor_, theme.comment, {SCE_H_COMMENT});
+        setForegrounds(editor_, theme.number, {SCE_H_NUMBER});
+        setForegrounds(editor_, theme.preprocessor, {SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN});
+        break;
+    case SCLEX_CSS:
+        setForegrounds(editor_, theme.keyword,
+                       {SCE_CSS_TAG, SCE_CSS_CLASS, SCE_CSS_ID, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
+                        SCE_CSS_GROUP_RULE});
+        setForegrounds(editor_, theme.string, {SCE_CSS_DOUBLESTRING, SCE_CSS_SINGLESTRING, SCE_CSS_VALUE});
+        setForegrounds(editor_, theme.comment, {SCE_CSS_COMMENT});
+        setForegrounds(editor_, theme.preprocessor,
+                       {SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3, SCE_CSS_DIRECTIVE,
+                        SCE_CSS_IMPORTANT, SCE_CSS_VARIABLE});
+        break;
+    case SCLEX_DIFF:
+        setForegrounds(editor_, theme.keyword, {SCE_DIFF_COMMAND, SCE_DIFF_HEADER, SCE_DIFF_POSITION});
+        setForegrounds(editor_, theme.string, {SCE_DIFF_ADDED, SCE_DIFF_PATCH_ADD});
+        setForegrounds(editor_, theme.comment, {SCE_DIFF_COMMENT});
+        setForegrounds(editor_, theme.preprocessor, {SCE_DIFF_DELETED, SCE_DIFF_PATCH_DELETE, SCE_DIFF_CHANGED});
+        break;
     default:
         break;
     }
@@ -491,7 +560,14 @@ void EditorView::toggleFold()
         editor_->send(SCI_TOGGLEFOLD, line);
 }
 
-bool EditorView::findNext(const QString &text, bool backwards, bool caseSensitive)
+namespace {
+int searchFlags(bool caseSensitive, bool wholeWord)
+{
+    return (caseSensitive ? SCFIND_MATCHCASE : 0) | (wholeWord ? SCFIND_WHOLEWORD : 0);
+}
+} // namespace
+
+bool EditorView::findNext(const QString &text, bool backwards, bool caseSensitive, bool wholeWord)
 {
     if (text.isEmpty())
         return false;
@@ -499,7 +575,7 @@ bool EditorView::findNext(const QString &text, bool backwards, bool caseSensitiv
     const auto first = backwards ? editor_->send(SCI_GETLENGTH) : 0;
     const auto last = backwards ? 0 : editor_->send(SCI_GETLENGTH);
     const auto from = editor_->send(backwards ? SCI_GETSELECTIONSTART : SCI_GETSELECTIONEND);
-    editor_->send(SCI_SETSEARCHFLAGS, caseSensitive ? SCFIND_MATCHCASE : 0);
+    editor_->send(SCI_SETSEARCHFLAGS, searchFlags(caseSensitive, wholeWord));
     editor_->send(SCI_SETTARGETRANGE, from, last);
     if (editor_->sends(SCI_SEARCHINTARGET, needle.size(), needle.constData()) < 0) {
         editor_->send(SCI_SETTARGETRANGE, first, last);
@@ -514,14 +590,14 @@ bool EditorView::findNext(const QString &text, bool backwards, bool caseSensitiv
     return true;
 }
 
-bool EditorView::replaceCurrent(const QString &text, const QString &replacement, bool caseSensitive)
+bool EditorView::replaceCurrent(const QString &text, const QString &replacement, bool caseSensitive, bool wholeWord)
 {
     if (text.isEmpty() || editor_->send(SCI_GETREADONLY))
         return false;
     const QByteArray needle = text.toUtf8();
     const auto start = editor_->send(SCI_GETSELECTIONSTART);
     const auto end = editor_->send(SCI_GETSELECTIONEND);
-    editor_->send(SCI_SETSEARCHFLAGS, caseSensitive ? SCFIND_MATCHCASE : 0);
+    editor_->send(SCI_SETSEARCHFLAGS, searchFlags(caseSensitive, wholeWord));
     editor_->send(SCI_SETTARGETRANGE, start, end);
     if (editor_->sends(SCI_SEARCHINTARGET, needle.size(), needle.constData()) != start
         || editor_->send(SCI_GETTARGETEND) != end) {
@@ -533,14 +609,14 @@ bool EditorView::replaceCurrent(const QString &text, const QString &replacement,
     return true;
 }
 
-qsizetype EditorView::replaceAll(const QString &text, const QString &replacement, bool caseSensitive)
+qsizetype EditorView::replaceAll(const QString &text, const QString &replacement, bool caseSensitive, bool wholeWord)
 {
     if (text.isEmpty() || editor_->send(SCI_GETREADONLY))
         return 0;
     const QByteArray needle = text.toUtf8();
     const QByteArray bytes = replacement.toUtf8();
     qsizetype replaced = 0;
-    editor_->send(SCI_SETSEARCHFLAGS, caseSensitive ? SCFIND_MATCHCASE : 0);
+    editor_->send(SCI_SETSEARCHFLAGS, searchFlags(caseSensitive, wholeWord));
     editor_->send(SCI_TARGETWHOLEDOCUMENT);
     editor_->send(SCI_BEGINUNDOACTION);
     while (editor_->sends(SCI_SEARCHINTARGET, needle.size(), needle.constData()) >= 0) {

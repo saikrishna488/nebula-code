@@ -42,9 +42,9 @@ public:
     void setTextWrapEnabled(bool enabled);
     void addNextOccurrence();
     void toggleFold();
-    bool findNext(const QString &text, bool backwards = false, bool caseSensitive = false);
-    bool replaceCurrent(const QString &text, const QString &replacement, bool caseSensitive = false);
-    qsizetype replaceAll(const QString &text, const QString &replacement, bool caseSensitive = false);
+    bool findNext(const QString &text, bool backwards = false, bool caseSensitive = false, bool wholeWord = false);
+    bool replaceCurrent(const QString &text, const QString &replacement, bool caseSensitive = false, bool wholeWord = false);
+    qsizetype replaceAll(const QString &text, const QString &replacement, bool caseSensitive = false, bool wholeWord = false);
     void replaceRange(qsizetype startByte, qsizetype endByte, const QByteArray &text);
     qsizetype cursorPosition() const;
     qsizetype cursorLine() const;
