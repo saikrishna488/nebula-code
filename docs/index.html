@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nebula Code — Native Qt &amp; C++20 Code Editor</title>
+  <meta name="description" content="An offline-first native Qt Widgets code editor using 35–70 MiB RAM—94–97% less memory than VS Code—with Scintilla editing, integrated terminal, clangd LSP, and Git.">
+  <link rel="icon" type="image/svg+xml" href="assets/nebula-icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="nav-wrap">
+    <nav class="nav container">
+      <a class="brand" href="#top">
+        <img src="assets/nebula-icon.svg" alt="Nebula Code logo" width="28" height="28">
+        <span>Nebula Code</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#download">Download</a>
+        <a class="nav-cta" href="https://github.com/saikrishna488/nebula-code" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero container">
+      <div class="badge">Native C++20 · Qt Widgets · GPLv3 · No Electron</div>
+      <h1>A native code editor that starts in <span class="accent">96 ms</span> and sips <span class="accent">35 MiB</span>.</h1>
+      <p class="subtitle">
+        Nebula Code is an offline-first editor for macOS and Linux powered by Scintilla, Lexilla, and QTermWidget—with split buffers, local <code>clangd</code> LSP, and Git built in.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/saikrishna488/nebula-code/releases" target="_blank" rel="noopener">Download Latest Release</a>
+        <a class="btn btn-secondary" href="https://github.com/saikrishna488/nebula-code" target="_blank" rel="noopener">View Source on GitHub</a>
+      </div>
+
+      <div class="stat-strip">
+        <div class="stat">
+          <strong>35–70 MiB</strong>
+          <span>Median RSS / PSS</span>
+        </div>
+        <div class="stat">
+          <strong>94–97%</strong>
+          <span>Less memory than VS Code</span>
+        </div>
+        <div class="stat">
+          <strong>18–24×</strong>
+          <span>Faster cold window launch</span>
+        </div>
+        <div class="stat">
+          <strong>0</strong>
+          <span>Chromium or Node processes</span>
+        </div>
+      </div>
+
+      <div class="showcase">
+        <div class="showcase-bar">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <div class="theme-switch" role="tablist" aria-label="Editor theme preview">
+            <button class="tab-btn active" data-img="screenshots/split-editor.png" data-caption="Dark theme — side-by-side split editor sharing live document state" type="button">Dark Split View</button>
+            <button class="tab-btn" data-img="screenshots/text-wrap.png" data-caption="Light theme — wrapped Markdown editing with live minimap" type="button">Light Text Wrap</button>
+          </div>
+        </div>
+        <figure class="showcase-frame">
+          <img id="preview-img" src="screenshots/split-editor.png" alt="Nebula Code on macOS in Dark theme with a Markdown guide and a checklist open side by side">
+          <figcaption id="preview-caption">Dark theme — side-by-side split editor sharing live document state</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="features" class="section container">
+      <div class="section-head">
+        <h2>Built for daily coding, not browser overhead</h2>
+        <p>Every panel is native Qt Widgets with CPU-painted Scintilla views.</p>
+      </div>
+
+      <div class="grid">
+        <article class="card">
+          <h3>Shared Split Buffers</h3>
+          <p>Split left or right, or move any tab to a new window. Splits share the live document and undo stack while keeping independent cursors and scroll positions.</p>
+        </article>
+        <article class="card">
+          <h3>Fast Navigation &amp; Search</h3>
+          <p>Jump anywhere with <strong>⌘P</strong> Quick Open, <strong>Ctrl+G</strong> Go to Line, <strong>⌘⇧F</strong> Find in Files, <strong>⌘D</strong> multi-cursor, and Match Case / Whole Word find.</p>
+        </article>
+        <article class="card">
+          <h3>Dockable PTY Terminal</h3>
+          <p>Real QTermWidget shell docked at any of the four window edges, remembered per workspace, with 5,000 lines of scrollback.</p>
+        </article>
+        <article class="card">
+          <h3>C/C++ clangd &amp; Local Git</h3>
+          <p>On-demand LSP 3.17 completion, diagnostics, go-to-definition, and references via local <code>clangd</code>, plus stage, unstage, diff, and commit with local <code>git</code>.</p>
+        </article>
+        <article class="card">
+          <h3>Multi-Language Highlighting</h3>
+          <p>Bundled Lexilla highlighting and folding for C/C++, Python, JSON, Markdown, Bash/Zsh, CMake, YAML, Rust, HTML/XML, CSS, and Diff/Patch.</p>
+        </article>
+        <article class="card">
+          <h3>JSON Themes &amp; Keybindings</h3>
+          <p>Customize built-in Light and Dark palettes, fonts, minimap, text wrap, and portable shortcuts in versioned local JSON files.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="benchmarks" class="section container">
+      <div class="section-head">
+        <h2>Measured against VS Code on Ubuntu 26.04</h2>
+        <p>Seven fresh launches per editor and file size on GitHub-hosted x86-64 and ARM64 runners (revision <code>6028b09</code>).</p>
+      </div>
+
+      <div class="bench-grid">
+        <div class="bench-card">
+          <h3>Memory Footprint (Median PSS)</h3>
+          <div class="bar-group">
+            <div class="bar-label"><span>x86-64 · 75 KB file</span><strong>35.08 MiB vs 1,109 MiB</strong></div>
+            <div class="bar-track"><div class="bar-fill nebula" style="width: 3.2%"></div></div>
+            <div class="bar-track"><div class="bar-fill vscode" style="width: 100%"></div></div>
+          </div>
+          <div class="bar-group">
+            <div class="bar-label"><span>x86-64 · 11.25 MB file</span><strong>57.48 MiB vs 1,194 MiB</strong></div>
+            <div class="bar-track"><div class="bar-fill nebula" style="width: 4.8%"></div></div>
+            <div class="bar-track"><div class="bar-fill vscode" style="width: 100%"></div></div>
+          </div>
+          <div class="bar-group">
+            <div class="bar-label"><span>ARM64 · 75 KB file</span><strong>48.60 MiB vs 1,137 MiB</strong></div>
+            <div class="bar-track"><div class="bar-fill nebula" style="width: 4.3%"></div></div>
+            <div class="bar-track"><div class="bar-fill vscode" style="width: 100%"></div></div>
+          </div>
+          <div class="bar-group">
+            <div class="bar-label"><span>ARM64 · 11.25 MB file</span><strong>70.17 MiB vs 1,189 MiB</strong></div>
+            <div class="bar-track"><div class="bar-fill nebula" style="width: 5.9%"></div></div>
+            <div class="bar-track"><div class="bar-fill vscode" style="width: 100%"></div></div>
+          </div>
+          <div class="legend">
+            <span><i class="dot nebula"></i> Nebula Code 1.0.0</span>
+            <span><i class="dot vscode"></i> VS Code 1.148.0</span>
+          </div>
+        </div>
+
+        <div class="bench-card">
+          <h3>Cold Launch to Visible Window</h3>
+          <table>
+            <thead>
+              <tr><th>Arch</th><th>File</th><th>Nebula</th><th>VS Code</th><th>Speedup</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>x86-64</td><td>75 KB</td><td>145 ms</td><td>2.71 s</td><td><strong>18.7×</strong></td></tr>
+              <tr><td>x86-64</td><td>11.25 MB</td><td>259 ms</td><td>2.70 s</td><td><strong>10.4×</strong></td></tr>
+              <tr><td>ARM64</td><td>75 KB</td><td>96 ms</td><td>2.34 s</td><td><strong>24.4×</strong></td></tr>
+              <tr><td>ARM64</td><td>11.25 MB</td><td>199 ms</td><td>2.31 s</td><td><strong>11.6×</strong></td></tr>
+            </tbody>
+          </table>
+          <p class="bench-note">
+            <a href="https://github.com/saikrishna488/nebula-code/actions/runs/45656171484" target="_blank" rel="noopener">Inspect CI run and raw JSON artifacts →</a>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="section container">
+      <div class="section-head">
+        <h2>Get Nebula Code</h2>
+        <p>Prebuilt packages for macOS and Ubuntu 26.04, or build from source in minutes.</p>
+      </div>
+
+      <div class="install-grid">
+        <div class="install-card">
+          <h3>macOS (Intel &amp; Apple Silicon)</h3>
+          <p>Download <code>*-macos-arm64.zip</code> or <code>*-macos-x86_64.zip</code> from Releases and move <code>NebulaCode.app</code> to Applications.</p>
+          <a class="btn btn-primary" href="https://github.com/saikrishna488/nebula-code/releases" target="_blank" rel="noopener">Download macOS ZIP</a>
+        </div>
+        <div class="install-card">
+          <h3>Ubuntu 26.04 (x86-64 &amp; ARM64)</h3>
+          <p>Download the <code>.deb</code> package for your architecture and install with APT:</p>
+          <pre><code>sudo apt install ./nebula-code_*_amd64.deb</code></pre>
+        </div>
+        <div class="install-card">
+          <h3>Build from Source</h3>
+          <p>Requires C++20, CMake 3.25+, Ninja, and Qt 6.5+ (Qt 6.12.1+ recommended on macOS):</p>
+          <pre><code>cmake --preset release
+cmake --build --preset release --parallel 4
+ctest --preset release</code></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer container">
+    <span>Nebula Code · Licensed under GPLv3</span>
+    <span>
+      <a href="https://github.com/saikrishna488/nebula-code" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="https://github.com/saikrishna488/nebula-code/releases" target="_blank" rel="noopener">Releases</a> ·
+      <a href="https://github.com/saikrishna488/nebula-code/issues" target="_blank" rel="noopener">Issues</a>
+    </span>
+  </footer>
+
+  <script>
+    const buttons = document.querySelectorAll('.tab-btn');
+    const img = document.getElementById('preview-img');
+    const caption = document.getElementById('preview-caption');
+    buttons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        buttons.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        img.src = btn.dataset.img;
+        caption.textContent = btn.dataset.caption;
+      });
+    });
+  </script>
+</body>
+</html>
