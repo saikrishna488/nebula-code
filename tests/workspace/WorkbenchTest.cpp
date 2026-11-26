@@ -303,6 +303,53 @@ private slots:
     QVERIFY(restoredTabs);
     auto *selected = static_cast<DocumentTab *>(restoredTabs->currentWidget());
     QCOMPARE(selected->file.path, normalizedPath(third.fileName()));
+
+    // Splitting an inactive tab keeps the current tab active in tabs_ and
+    // cleanly replaces any previous pinned split without leaving a zombie split.
+    auto *otherTab = static_cast<DocumentTab *>(restoredTabs->widget(0));
+    QVERIFY(otherTab && otherTab != selected);
+    QVERIFY(otherTab->secondary);
+    const auto chooseRestored = [&](int tabIndex, const QString &label) {
+      bool triggered = false;
+      QTimer::singleShot(0, &restored, [&] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+          return;
+        for (auto *action : menu->actions()) {
+          if (action->text() != label)
+            continue;
+          menu->close();
+          action->trigger();
+          triggered = true;
+          return;
+        }
+        menu->close();
+      });
+      auto *bar = restoredTabs->tabBar();
+      emit bar->customContextMenuRequested(bar->tabRect(tabIndex).center());
+      QVERIFY(triggered);
+    };
+    chooseRestored(restoredTabs->indexOf(selected), "Split Left");
+    QCOMPARE(restoredTabs->currentWidget(), selected);
+    QVERIFY(!otherTab->secondary);
+    QVERIFY(selected->secondary);
+    restoredPane = qobject_cast<QTabWidget *>(restoredArea->widget(0));
+    QVERIFY(restoredPane);
+    QCOMPARE(restoredPane->currentWidget(), selected->secondary);
+
+    // Selecting a different tab in tabs_ then splitting an inactive tab keeps
+    // the active tab in tabs_ unchanged, and closing from the pinned pane
+    // only closes the split and keeps the document open.
+    restoredTabs->setCurrentWidget(otherTab);
+    chooseRestored(restoredTabs->indexOf(selected), "Split Right");
+    QCOMPARE(restoredTabs->currentWidget(), otherTab);
+    QVERIFY(selected->secondary);
+    selected->secondary->setFocus();
+    QApplication::processEvents();
+    restored.findChild<QAction *>("file.close")->trigger();
+    QVERIFY(!selected->secondary);
+    QCOMPARE(restoredArea->count(), 1);
+    QCOMPARE(restoredTabs->count(), 2);
   }
 
   void sessionAndConflicts() {
@@ -535,6 +582,119 @@ private slots:
     QVERIFY(tab->file.path.endsWith("/alpha.cpp"));
     QCOMPARE(tab->active->cursorLine(), qsizetype{0});
     QCOMPARE(tab->active->cursorColumn(), qsizetype{4});
+  }
+
+  void sidebarCreationAndContextMenu() {
+    QTemporaryDir dir;
+    const QString root = QFileInfo(dir.path()).canonicalFilePath();
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    Workbench window(root);
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto *newFolder = window.findChild<QToolButton *>("sidebarNewFolder");
+    auto *newFile = window.findChild<QToolButton *>("sidebarNewFile");
+    auto *tree = window.findChild<QTreeView *>("workspaceFiles");
+    QVERIFY(newFolder && newFile && tree);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    QVERIFY(model);
+
+    const auto acceptInput = [&window](const QString &value) {
+      QTimer::singleShot(0, &window, [value] {
+        auto *dialog =
+            qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        QVERIFY(dialog);
+        dialog->setTextValue(value);
+        dialog->accept();
+      });
+    };
+
+    acceptInput("notes");
+    newFolder->click();
+    const QString notesDir = root + "/notes";
+    QVERIFY(QFileInfo(notesDir).isDir());
+    QTRY_VERIFY(model->index(notesDir).isValid());
+    tree->setCurrentIndex(model->index(notesDir));
+
+    acceptInput("todo.md");
+    newFile->click();
+    const QString todoFile = root + "/notes/todo.md";
+    QVERIFY(QFileInfo::exists(todoFile));
+    auto *tabs = window.findChild<QTabWidget *>();
+    QTRY_COMPARE(tabs->count(), 1);
+    auto *tab = static_cast<DocumentTab *>(tabs->currentWidget());
+    QVERIFY(tab->file.path.endsWith("/notes/todo.md"));
+
+    const QModelIndex notesIndex = model->index(notesDir);
+    tree->expand(notesIndex);
+    QTRY_VERIFY(model->rowCount(notesIndex) > 0);
+    tree->setExpanded(notesIndex, true);
+    QTRY_VERIFY(model->index(todoFile).isValid());
+    const QModelIndex todoIndex = model->index(todoFile);
+    tree->scrollTo(todoIndex);
+    QTRY_VERIFY(!tree->visualRect(todoIndex).isEmpty());
+    const QPoint itemPos = tree->visualRect(todoIndex).center();
+
+    // Trigger Rename from the context menu and accept the prompt.
+    QTimer::singleShot(0, &window, [&] {
+      QMenu *menu = nullptr;
+      for (auto *w : QApplication::topLevelWidgets()) {
+        if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible()) {
+          menu = m;
+          break;
+        }
+      }
+      QVERIFY(menu);
+      menu->close();
+      QStringList labels;
+      QAction *rename = nullptr;
+      for (auto *action : menu->actions()) {
+        if (!action->isSeparator())
+          labels << action->text();
+        if (action->text() == "Rename…")
+          rename = action;
+      }
+      QVERIFY(labels.contains("Open"));
+      QVERIFY(labels.contains("New File…"));
+      QVERIFY(labels.contains("New Folder…"));
+      QVERIFY(labels.contains("Delete"));
+      QVERIFY(labels.contains("Copy Path"));
+      QVERIFY(rename);
+      acceptInput("renamed.md");
+      rename->trigger();
+    });
+    emit tree->customContextMenuRequested(itemPos);
+
+    const QString renamedFile = root + "/notes/renamed.md";
+    QTRY_VERIFY(QFileInfo::exists(renamedFile));
+    QVERIFY(!QFileInfo::exists(todoFile));
+    QVERIFY(tab->file.path.endsWith("/notes/renamed.md"));
+
+    QTRY_VERIFY(model->index(renamedFile).isValid());
+    const QModelIndex renamedIndex = model->index(renamedFile);
+    tree->scrollTo(renamedIndex);
+    QTRY_VERIFY(!tree->visualRect(renamedIndex).isEmpty());
+    QTimer::singleShot(0, &window, [&] {
+      QMenu *menu = nullptr;
+      for (auto *w : QApplication::topLevelWidgets()) {
+        if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible()) {
+          menu = m;
+          break;
+        }
+      }
+      QVERIFY(menu);
+      menu->close();
+      for (auto *action : menu->actions()) {
+        if (action->text() == "Copy Path") {
+          action->trigger();
+          return;
+        }
+      }
+      QFAIL("Copy Path action not found");
+    });
+    emit tree->customContextMenuRequested(
+        tree->visualRect(renamedIndex).center());
+    QVERIFY(QApplication::clipboard()->text().endsWith("/notes/renamed.md"));
   }
 };
 QTEST_MAIN(WorkbenchTest)

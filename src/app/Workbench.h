@@ -50,8 +50,9 @@ private:
   void toggleSplit(DocumentTab *tab);
   void splitTab(DocumentTab *tab, bool left);
   void pinSplit(DocumentTab *tab, bool left);
-  void unpinSplit();
+  void unpinSplit(bool keepSplit = false);
   void showTabMenu(const QPoint &position);
+  void showPinnedTabMenu(const QPoint &position);
   void moveTabToNewWindow(DocumentTab *tab);
   void updateTitle(DocumentTab *tab);
   bool save(DocumentTab *tab);

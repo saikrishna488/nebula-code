@@ -75,6 +75,19 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   tabBar->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(tabBar, &QTabBar::customContextMenuRequested, this,
           &Workbench::showTabMenu);
+  connect(tabBar, &QTabBar::tabBarClicked, this, [this](int index) {
+    if (index < 0)
+      return;
+    pinnedFocused_ = false;
+    auto *tab = static_cast<DocumentTab *>(tabs_->widget(index));
+    if (tab) {
+      if (tab == pinnedTab_)
+        tab->active = tab->primary;
+      tab->active->setFocus();
+    }
+    updateTitle(current());
+    commands_.refresh();
+  });
   editorArea_ = new QSplitter;
   editorArea_->setChildrenCollapsible(false);
   editorArea_->addWidget(tabs_);
@@ -91,6 +104,38 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   sidebar_ = new Sidebar(
       root_, [this](const QString &path) { openFile(path); },
       [this] { findChild<QAction *>("workspace.open")->trigger(); }, this);
+  connect(sidebar_, &Sidebar::pathRenamed, this,
+          [this](const QString &oldPath, const QString &newPath) {
+            const QString oldNorm = normalizedPath(oldPath);
+            const QString newNorm = normalizedPath(newPath);
+            const QString oldPrefix = oldNorm + '/';
+            for (int i = 0; i < tabs_->count(); ++i) {
+              auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
+              if (tab->file.path == oldNorm) {
+                tab->file.path = newNorm;
+                tab->primary->setLanguageForPath(newNorm);
+                if (tab->secondary)
+                  tab->secondary->setLanguageForPath(newNorm);
+                updateLanguage(tab);
+                updateTitle(tab);
+              } else if (tab->file.path.startsWith(oldPrefix)) {
+                tab->file.path = newNorm + tab->file.path.mid(oldNorm.size());
+                updateLanguage(tab);
+                updateTitle(tab);
+              }
+            }
+          });
+  connect(sidebar_, &Sidebar::pathDeleted, this, [this](const QString &path) {
+    const QString norm = normalizedPath(path);
+    const QString prefix = norm + '/';
+    for (int i = tabs_->count() - 1; i >= 0; --i) {
+      auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
+      if ((tab->file.path == norm || tab->file.path.startsWith(prefix)) &&
+          !tab->primary->isModified()) {
+        closeTab(i);
+      }
+    }
+  });
   addDockWidget(Qt::LeftDockWidgetArea, sidebar_);
   setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
   resizeDocks({sidebar_}, {248}, Qt::Horizontal);
@@ -362,19 +407,24 @@ void Workbench::toggleSplit(DocumentTab *tab) {
   if (!tab)
     return;
   if (tab->secondary) {
-    const bool wasPinned = tab == pinnedTab_;
-    if (wasPinned)
-      unpinSplit();
-    tab->active = tab->primary;
-    delete tab->secondary;
-    tab->secondary = nullptr;
-    if (wasPinned)
-      tab = static_cast<DocumentTab *>(tabs_->currentWidget());
+    if (tab == pinnedTab_) {
+      unpinSplit(false);
+      tab = current();
+    } else {
+      tab->active = tab->primary;
+      delete tab->secondary;
+      tab->secondary = nullptr;
+    }
+    if (tab) {
+      tab->active->setFocus();
+      updateTitle(tab);
+    }
+    commands_.refresh();
   } else {
     splitTab(tab, false);
-    return;
+    updateTitle(tab);
+    commands_.refresh();
   }
-  tab->active->setFocus();
 }
 void Workbench::splitTab(DocumentTab *tab, bool left) {
   if (!tab->secondary) {
@@ -390,49 +440,73 @@ void Workbench::splitTab(DocumentTab *tab, bool left) {
   tab->active->setFocus();
 }
 void Workbench::pinSplit(DocumentTab *tab, bool left) {
-  if (pinnedTab_ != tab) {
-    unpinSplit();
+  if (!tab)
+    return;
+  const bool wasPinned = pinnedTab_ == tab;
+  const bool sideChanged = !wasPinned || pinnedLeft_ != left;
+  if (!wasPinned) {
+    unpinSplit(false);
     splitTab(tab, left);
     pinnedTab_ = tab;
     pinnedPane_ = new QTabWidget;
     pinnedPane_->setDocumentMode(true);
     pinnedPane_->setTabsClosable(true);
-    pinnedPane_->tabBar()->setStyleSheet(tabs_->tabBar()->styleSheet());
+    auto *pinnedBar = pinnedPane_->tabBar();
+    pinnedBar->setStyleSheet(tabs_->tabBar()->styleSheet());
+    pinnedBar->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(pinnedBar, &QTabBar::customContextMenuRequested, this,
+            &Workbench::showPinnedTabMenu);
+    connect(pinnedBar, &QTabBar::tabBarClicked, this, [this](int index) {
+      if (index < 0 || !pinnedTab_)
+        return;
+      pinnedFocused_ = true;
+      pinnedTab_->active = pinnedTab_->secondary;
+      pinnedTab_->secondary->setFocus();
+      updateTitle(pinnedTab_);
+      commands_.refresh();
+    });
     pinnedPane_->addTab(tab->secondary, titleFor(tab));
     connect(pinnedPane_, &QTabWidget::tabCloseRequested, this,
             [this, tab] { toggleSplit(tab); });
   }
   pinnedLeft_ = left;
-  editorArea_->insertWidget(left ? 0 : 1, pinnedPane_);
-  editorArea_->setSizes({1, 1});
+  if (sideChanged) {
+    editorArea_->insertWidget(left ? 0 : 1, pinnedPane_);
+    editorArea_->setSizes({1, 1});
+  }
   tab->secondary->show();
+  tab->active = tab->secondary;
   tab->secondary->setFocus();
-  pinnedFocused_ = tab->secondary->hasFocus();
+  pinnedFocused_ = true;
   updateTitle(tab);
-  updateTitle(current());
   commands_.refresh();
 }
-void Workbench::unpinSplit() {
+void Workbench::unpinSplit(bool keepSplit) {
   if (!pinnedTab_)
     return;
   auto *tab = pinnedTab_;
   pinnedTab_ = nullptr;
   pinnedFocused_ = false;
   pinnedPane_->removeTab(0);
-  tab->insertWidget(pinnedLeft_ ? 0 : 1, tab->secondary);
   pinnedPane_->hide();
   pinnedPane_->setParent(this);
   pinnedPane_->deleteLater();
   pinnedPane_ = nullptr;
-  tab->setSizes({1, 1});
-  tab->secondary->show();
+  if (keepSplit) {
+    tab->insertWidget(pinnedLeft_ ? 0 : 1, tab->secondary);
+    tab->setSizes({1, 1});
+    tab->secondary->show();
+  } else {
+    tab->active = tab->primary;
+    delete tab->secondary;
+    tab->secondary = nullptr;
+  }
 }
 void Workbench::showTabMenu(const QPoint &position) {
   auto *bar = tabs_->tabBar();
   const int index = bar->tabAt(position);
   if (index < 0)
     return;
-  tabs_->setCurrentIndex(index);
   auto *tab = static_cast<DocumentTab *>(tabs_->widget(index));
   QMenu menu(bar);
   menu.addAction(tr("Split Left"), this, [this, tab] { pinSplit(tab, true); });
@@ -444,9 +518,23 @@ void Workbench::showTabMenu(const QPoint &position) {
                  [this, tab] { closeTab(tabs_->indexOf(tab)); });
   menu.exec(bar->mapToGlobal(position));
 }
+void Workbench::showPinnedTabMenu(const QPoint &position) {
+  if (!pinnedPane_ || !pinnedTab_)
+    return;
+  auto *bar = pinnedPane_->tabBar();
+  if (bar->tabAt(position) < 0)
+    return;
+  auto *tab = pinnedTab_;
+  QMenu menu(bar);
+  menu.addAction(tr("Split Left"), this, [this, tab] { pinSplit(tab, true); });
+  menu.addAction(tr("Split Right"), this, [this, tab] { pinSplit(tab, false); });
+  menu.addSeparator();
+  menu.addAction(tr("Close Split"), this, [this, tab] { toggleSplit(tab); });
+  menu.exec(bar->mapToGlobal(position));
+}
 void Workbench::moveTabToNewWindow(DocumentTab *tab) {
   if (tab == pinnedTab_)
-    unpinSplit();
+    unpinSplit(true);
   auto *window = new Workbench(root_, false);
   tab->sync->stop();
   if (tab->languageService)
@@ -686,7 +774,13 @@ void Workbench::setupCommands() {
       [this] { return current() && !current()->file.path.isEmpty(); });
   add(
       file, "file.close", tr("Close Tab"), QKeySequence::Close,
-      [this] { closeTab(tabs_->indexOf(current())); }, hasTab);
+      [this] {
+        if (pinnedFocused_ && pinnedTab_)
+          toggleSplit(pinnedTab_);
+        else
+          closeTab(tabs_->indexOf(current()));
+      },
+      hasTab);
   auto action = [&](const char *id, QString name, QKeySequence key,
                     void (EditorView::*fn)()) {
     add(
@@ -1059,8 +1153,12 @@ void Workbench::restoreSession(bool restoreWindowGeometry) {
       break;
     }
   }
-  if (pinnedTab_ && data["pinnedFocused"].toBool())
+  if (pinnedTab_ && data["pinnedFocused"].toBool()) {
+    pinnedTab_->active = pinnedTab_->secondary;
+    pinnedFocused_ = true;
     pinnedTab_->secondary->setFocus();
+    updateTitle(pinnedTab_);
+  }
   if (restoreWindowGeometry)
     restoreGeometry(
         QByteArray::fromBase64(data["geometry"].toString().toLatin1()));
