@@ -13,8 +13,14 @@
 #include <QFileDialog>
 #include <QFileSystemModel>
 #include <QTreeView>
+#include <QTreeWidget>
+#include <algorithm>
 #include <QPushButton>
+#include <QPlainTextEdit>
+#include <QProcess>
+#include <QSaveFile>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
@@ -79,6 +85,7 @@ private slots:
     });
     action->trigger();
     QVERIFY(text.contains("@saikrishna488"));
+    QVERIFY(text.contains("@Rakshith4529"));
     QVERIFY(text.contains("Codex (GPT-6.2 Sol)"));
   }
 
@@ -518,12 +525,18 @@ private slots:
     {
       QFile a(root + "/alpha.cpp");
       QVERIFY(a.open(QIODevice::WriteOnly));
-      a.write("int alpha = 1;\nint alphabet = 2;\n");
+      a.write(QStringLiteral("\t// 😀é alpha\r\nint alphabet = 2;\r\n").toUtf8());
     }
     {
       QFile b(root + "/sub/beta.rs");
       QVERIFY(b.open(QIODevice::WriteOnly));
       b.write("fn beta() {\n    let x = 42;\n}\n");
+    }
+
+    {
+      QFile large(root + "/large.txt");
+      QVERIFY(large.open(QIODevice::WriteOnly));
+      QVERIFY(large.resize(2 * 1024 * 1024 + 1));
     }
 
     Workbench window(root);
@@ -571,9 +584,15 @@ private slots:
       if (box->text() == "Whole Word")
         box->setChecked(true);
     }
+    query->setText("beta");
+    QMetaObject::invokeMethod(query, "returnPressed");
     query->setText("alpha");
     QMetaObject::invokeMethod(query, "returnPressed");
     QTRY_COMPARE(results->count(), 1);
+    bool reportsPartialResults = false;
+    for (const auto *label : dock->findChildren<QLabel *>())
+      reportsPartialResults |= label->text().contains("partial results");
+    QVERIFY(reportsPartialResults);
     QVERIFY(results->item(0)->text().contains("alpha.cpp:1:"));
     QMetaObject::invokeMethod(results, "itemActivated",
                               Q_ARG(QListWidgetItem *, results->item(0)));
@@ -581,7 +600,100 @@ private slots:
     tab = static_cast<DocumentTab *>(tabs->currentWidget());
     QVERIFY(tab->file.path.endsWith("/alpha.cpp"));
     QCOMPARE(tab->active->cursorLine(), qsizetype{0});
-    QCOMPARE(tab->active->cursorColumn(), qsizetype{4});
+    QCOMPARE(tab->active->cursorPosition(),
+             QStringLiteral("\t// 😀é ").toUtf8().size());
+  }
+
+  void reloadsExternalEditsAndMarksMissingFiles() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    qputenv("NEBULA_CONFIG_DIR", dir.filePath("config").toUtf8());
+    const QString path = dir.filePath("notes.txt");
+    const auto write = [&path](const QByteArray &bytes) {
+      QFile file(path);
+      return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    QVERIFY(write("first\nsecond\n"));
+    Workbench window(dir.path());
+    window.show();
+    QVERIFY(window.openFile(path));
+    auto *tabs = window.findChild<QTabWidget *>();
+    auto *tab = static_cast<DocumentTab *>(tabs->currentWidget());
+    window.findChild<QAction *>("view.split")->trigger();
+    QVERIFY(tab->secondary);
+    tab->primary->goToLineColumn(1, 2);
+    tab->secondary->goToLineColumn(0, 3);
+
+    QVERIFY(write("first changed\nsecond changed\n"));
+    QTRY_COMPARE(tab->primary->textUtf8(), QByteArray("first changed\nsecond changed\n"));
+    QCOMPARE(tab->secondary->textUtf8(), tab->primary->textUtf8());
+    QCOMPARE(tab->primary->cursorLine(), qsizetype{1});
+    QCOMPARE(tab->primary->cursorColumn(), qsizetype{2});
+    QCOMPARE(tab->secondary->cursorLine(), qsizetype{0});
+    QCOMPARE(tab->secondary->cursorColumn(), qsizetype{3});
+
+    QSaveFile replacement(path);
+    QVERIFY(replacement.open(QIODevice::WriteOnly));
+    QCOMPARE(replacement.write("atomic\n"), 7);
+    QVERIFY(replacement.commit());
+    QTRY_COMPARE(tab->primary->textUtf8(), QByteArray("atomic\n"));
+
+    tab->primary->replaceRange(0, 6, "unsaved");
+    QVERIFY(QFile::remove(path));
+    QTRY_VERIFY(tabs->tabText(tabs->currentIndex()).contains("Missing"));
+    QCOMPARE(tab->primary->textUtf8(), QByteArray("unsaved\n"));
+    QVERIFY(write("restored\n"));
+    QTRY_VERIFY(!tabs->tabText(tabs->currentIndex()).contains("Missing"));
+    QCOMPARE(tab->primary->textUtf8(), QByteArray("unsaved\n"));
+    QVERIFY(tab->primary->isModified());
+  }
+
+  void sourceControlRefreshKeepsTheDiffVisible() {
+    const QString git = QStandardPaths::findExecutable("git");
+    if (git.isEmpty())
+      QSKIP("Git is required");
+    QTemporaryDir repo;
+    QTemporaryDir config;
+    QVERIFY(repo.isValid() && config.isValid());
+    qputenv("NEBULA_CONFIG_DIR", config.path().toUtf8());
+    auto runGit = [&](const QStringList &args) {
+      QProcess process;
+      process.setWorkingDirectory(repo.path());
+      process.start(git, args);
+      return process.waitForFinished(5000) && process.exitStatus() == QProcess::NormalExit &&
+             process.exitCode() == 0;
+    };
+    const QString path = repo.filePath("tracked.txt");
+    const auto write = [&path](const QByteArray &bytes) {
+      QFile file(path);
+      return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    QVERIFY(runGit({"init"}));
+    QVERIFY(write("original\n"));
+    QVERIFY(runGit({"add", "tracked.txt"}));
+    QVERIFY(runGit({"-c", "user.name=Nebula Test", "-c", "user.email=test@example.com",
+                    "commit", "-m", "initial"}));
+
+    Workbench window(repo.path());
+    window.show();
+    window.findChild<QAction *>("view.git")->trigger();
+    auto *sidebar = window.findChild<QDockWidget *>("WorkspaceSidebar");
+    auto *tree = sidebar->findChild<QTreeWidget *>();
+    auto *diff = sidebar->findChild<QPlainTextEdit *>();
+    QVERIFY(tree && diff);
+    const auto labels = sidebar->findChildren<QLabel *>();
+    QTRY_VERIFY(std::any_of(labels.cbegin(), labels.cend(), [](const QLabel *label) {
+      return label->text() == "Working tree clean.";
+    }));
+    QCOMPARE(tree->topLevelItemCount(), 0);
+    QVERIFY(write("first change\n"));
+    QTRY_COMPARE(tree->topLevelItemCount(), 1);
+    tree->setCurrentItem(tree->topLevelItem(0));
+    emit tree->itemActivated(tree->currentItem(), 0);
+    QTRY_VERIFY(diff->toPlainText().contains("+first change"));
+    QVERIFY(write("second change\n"));
+    QTRY_VERIFY(diff->toPlainText().contains("+second change"));
+    QCOMPARE(tree->topLevelItemCount(), 1);
   }
 
   void sidebarCreationAndContextMenu() {

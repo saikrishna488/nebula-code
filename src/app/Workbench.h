@@ -7,6 +7,7 @@
 #include <QSplitter>
 
 class QFileSystemModel;
+class QFileSystemWatcher;
 class QTreeView;
 class QDockWidget;
 class QTabWidget;
@@ -27,6 +28,7 @@ public:
   EditorView *active = nullptr;
   QTimer *sync = nullptr;
   bool languageService = false;
+  bool fileMissing = false;
 };
 
 class Workbench final : public QMainWindow {
@@ -55,6 +57,9 @@ private:
   void showPinnedTabMenu(const QPoint &position);
   void moveTabToNewWindow(DocumentTab *tab);
   void updateTitle(DocumentTab *tab);
+  void refreshFileWatches();
+  void processChangedFiles();
+  void applyLoadedFile(DocumentTab *tab, FileState file);
   bool save(DocumentTab *tab);
   bool canClose(DocumentTab *tab);
   void closeTab(int index);
@@ -92,6 +97,8 @@ private:
   QDockWidget *languageDock_;
   QDockWidget *findDock_;
   QDockWidget *searchDock_;
+  QFileSystemWatcher *fileWatcher_ = nullptr;
+  QTimer *fileRefreshTimer_ = nullptr;
   TerminalSession *terminal_ = nullptr;
 
   LspClient *lsp_;

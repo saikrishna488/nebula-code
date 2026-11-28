@@ -17,6 +17,8 @@ struct GitEntry {
     QChar index = u' ';
     QChar workTree = u' ';
 
+    bool operator==(const GitEntry &) const = default;
+
     bool untracked() const { return index == u'?' && workTree == u'?'; }
     bool staged() const { return !untracked() && index != u' '; }
     bool unstaged() const { return workTree != u' '; }

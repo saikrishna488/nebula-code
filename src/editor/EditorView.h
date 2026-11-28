@@ -51,6 +51,7 @@ public:
     qsizetype cursorColumn() const;
     void setCursorPosition(qsizetype position);
     void goToLineColumn(qsizetype line, qsizetype column);
+    void goToLineByteColumn(qsizetype line, qsizetype byteColumn);
     void undo();
     void redo();
     void cut();

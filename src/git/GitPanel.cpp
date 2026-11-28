@@ -7,8 +7,10 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSplitter>
 #include <QTreeWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -23,8 +25,14 @@ GitPanel::GitPanel(QWidget *parent)
       unstage_(new QPushButton(tr("Unstage"), this)),
       stagedDiff_(new QPushButton(tr("Staged Diff"), this)),
       unstagedDiff_(new QPushButton(tr("Unstaged Diff"), this)),
-      commit_(new QPushButton(tr("Commit"), this))
+      commit_(new QPushButton(tr("Commit"), this)),
+      statusRefreshTimer_(new QTimer(this))
 {
+    statusRefreshTimer_->setInterval(1500);
+    connect(statusRefreshTimer_, &QTimer::timeout, this, [this] {
+        if (isVisible() && !repository_->root().isEmpty() && !repository_->busy())
+            repository_->refresh();
+    });
     status_->setTextFormat(Qt::PlainText);
     status_->setWordWrap(true);
     error_->setTextFormat(Qt::PlainText);
@@ -68,7 +76,10 @@ GitPanel::GitPanel(QWidget *parent)
     layout->addWidget(splitter, 1);
     layout->addLayout(commitRow);
 
-    connect(repository_, &GitRepository::messageChanged, status_, &QLabel::setText);
+    connect(repository_, &GitRepository::messageChanged, this, [this](const QString &message) {
+        if (diffPath_.isEmpty())
+            status_->setText(message);
+    });
     connect(repository_, &GitRepository::errorOccurred, this, [this](const QString &error) {
         error_->setText(error);
         error_->show();
@@ -78,7 +89,13 @@ GitPanel::GitPanel(QWidget *parent)
     connect(repository_, &GitRepository::commitSucceeded, message_, &QLineEdit::clear);
     connect(repository_, &GitRepository::diffReady, this, [this](const QString &title, const QString &diff) {
         status_->setText(title);
-        diff_->setPlainText(diff.isEmpty() ? tr("No changes in this diff.") : diff);
+        const auto text = diff.isEmpty() ? tr("No changes in this diff.") : diff;
+        if (diff_->toPlainText() != text) {
+            auto *scroll = diff_->verticalScrollBar();
+            const int position = scroll->value();
+            diff_->setPlainText(text);
+            scroll->setValue(position);
+        }
     });
     connect(files_, &QTreeWidget::itemSelectionChanged, this, &GitPanel::updateControls);
     connect(message_, &QLineEdit::textChanged, this, &GitPanel::updateControls);
@@ -102,13 +119,21 @@ GitPanel::GitPanel(QWidget *parent)
     connect(stagedDiff_, &QPushButton::clicked, this, [this] {
         if (const auto *entry = selectedEntry()) {
             error_->hide();
-            repository_->showDiff(*entry, true);
+            if (diffPath_ != entry->path || diffStaged_ != true)
+                diff_->clear();
+            diffPath_ = entry->path;
+            diffStaged_ = true;
+            repository_->showDiff(*entry, diffStaged_);
         }
     });
     connect(unstagedDiff_, &QPushButton::clicked, this, [this] {
         if (const auto *entry = selectedEntry()) {
             error_->hide();
-            repository_->showDiff(*entry, false);
+            if (diffPath_ != entry->path || diffStaged_ != false)
+                diff_->clear();
+            diffPath_ = entry->path;
+            diffStaged_ = false;
+            repository_->showDiff(*entry, diffStaged_);
         }
     });
     connect(files_, &QTreeWidget::itemActivated, this, [this] {
@@ -126,6 +151,10 @@ GitPanel::GitPanel(QWidget *parent)
 
 void GitPanel::setWorkspace(const QString &root)
 {
+    if (root.isEmpty())
+        statusRefreshTimer_->stop();
+    else
+        statusRefreshTimer_->start();
     if (root == repository_->workspace()) {
         if (!root.isEmpty() && !repository_->busy()) {
             error_->hide();
@@ -133,6 +162,7 @@ void GitPanel::setWorkspace(const QString &root)
         }
         return;
     }
+    diffPath_.clear();
     diff_->clear();
     message_->clear();
     error_->hide();
@@ -150,20 +180,32 @@ const GitEntry *GitPanel::selectedEntry() const
 
 void GitPanel::updateStatus(const QList<GitEntry> &entries)
 {
-    const auto *current = selectedEntry();
-    const QString selected = current ? current->path : QString{};
-    files_->clear();
-    diff_->clear();
-    entries_ = entries;
-    for (qsizetype index = 0; index < entries_.size(); ++index) {
-        const auto &entry = entries_.at(index);
-        const QString path = entry.originalPath.isEmpty() ? entry.path
-            : tr("%1 → %2").arg(entry.originalPath, entry.path);
-        auto *item = new QTreeWidgetItem(files_, {QString(entry.index), QString(entry.workTree), path});
-        item->setData(0, Qt::UserRole, index);
-        item->setToolTip(2, path);
-        if (entry.path == selected)
-            files_->setCurrentItem(item);
+    if (entries != entries_) {
+        const auto *current = selectedEntry();
+        const QString selected = current ? current->path : QString{};
+        files_->clear();
+        entries_ = entries;
+        for (qsizetype index = 0; index < entries_.size(); ++index) {
+            const auto &entry = entries_.at(index);
+            const QString path = entry.originalPath.isEmpty() ? entry.path
+                : tr("%1 → %2").arg(entry.originalPath, entry.path);
+            auto *item = new QTreeWidgetItem(files_, {QString(entry.index), QString(entry.workTree), path});
+            item->setData(0, Qt::UserRole, index);
+            item->setToolTip(2, path);
+            if (entry.path == selected)
+                files_->setCurrentItem(item);
+        }
+    }
+    if (!diffPath_.isEmpty()) {
+        const auto displayed = std::find_if(entries_.cbegin(), entries_.cend(), [this](const GitEntry &entry) {
+            return entry.path == diffPath_ && (diffStaged_ ? entry.staged() : entry.unstaged());
+        });
+        if (displayed != entries_.cend()) {
+            repository_->showDiff(*displayed, diffStaged_);
+            return;
+        }
+        diffPath_.clear();
+        diff_->clear();
     }
     if (!repository_->root().isEmpty()) {
         status_->setText(entries_.isEmpty() ? tr("Working tree clean.")

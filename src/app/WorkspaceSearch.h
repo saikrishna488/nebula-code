@@ -10,7 +10,6 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
-class QThread;
 
 namespace nebula {
 
@@ -28,7 +27,7 @@ public:
   void startSearch();
 
 signals:
-  void matchActivated(const QString &path, int line, int column);
+  void matchActivated(const QString &path, int line, int byteColumn);
 
 private:
   void cancelSearch();
@@ -40,7 +39,6 @@ private:
   QPushButton *searchButton_ = nullptr;
   QLabel *status_ = nullptr;
   QListWidget *results_ = nullptr;
-  QThread *worker_ = nullptr;
   std::shared_ptr<std::atomic_bool> cancelled_;
 };
 

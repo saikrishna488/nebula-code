@@ -3,13 +3,13 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMetaObject>
 #include <QPushButton>
 #include <QThread>
 #include <QVBoxLayout>
@@ -28,26 +28,37 @@ bool shouldSkipDir(const QString &name) {
          name == QStringLiteral("__pycache__");
 }
 
-QStringList collectWorkspaceFiles(const QString &root) {
+QStringList collectWorkspaceFiles(const QString &root,
+                                  const std::shared_ptr<std::atomic_bool> &cancelled = {},
+                                  bool *truncated = nullptr) {
   QStringList files;
+  if (truncated)
+    *truncated = false;
   if (root.isEmpty())
     return files;
   const QDir rootDir(root);
   QStringList dirs{root};
-  while (!dirs.isEmpty() && files.size() < kMaxIndexedFiles) {
-    const QDir dir(dirs.takeLast());
-    for (const QFileInfo &entry :
-         dir.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
-                           QDir::Name)) {
+  while (!dirs.isEmpty() && !(cancelled && cancelled->load())) {
+    QDirIterator entries(dirs.takeLast(),
+                         QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+    while (entries.hasNext()) {
+      if (cancelled && cancelled->load())
+        return files;
+      entries.next();
+      const QFileInfo entry = entries.fileInfo();
       if (entry.isSymLink())
         continue;
       if (entry.isDir()) {
         if (!shouldSkipDir(entry.fileName()))
           dirs.append(entry.filePath());
       } else {
+        if (files.size() == kMaxIndexedFiles) {
+          if (truncated)
+            *truncated = true;
+          files.sort(Qt::CaseInsensitive);
+          return files;
+        }
         files.append(rootDir.relativeFilePath(entry.filePath()));
-        if (files.size() >= kMaxIndexedFiles)
-          break;
       }
     }
   }
@@ -76,8 +87,15 @@ struct SearchMatch {
   QString absolutePath;
   QString relativePath;
   int line = 0;
-  int column = 0;
+  int byteColumn = 0;
   QString preview;
+};
+
+struct SearchResults {
+  QList<SearchMatch> matches;
+  int matchedFiles = 0;
+  int skippedLargeFiles = 0;
+  bool scanTruncated = false;
 };
 
 } // namespace
@@ -85,7 +103,8 @@ struct SearchMatch {
 QString quickOpenFile(QWidget *parent, const QString &root) {
   if (root.isEmpty())
     return {};
-  const QStringList files = collectWorkspaceFiles(root);
+  bool truncated = false;
+  const QStringList files = collectWorkspaceFiles(root, {}, &truncated);
   const QDir rootDir(root);
 
   QDialog dialog(parent);
@@ -98,6 +117,13 @@ QString quickOpenFile(QWidget *parent, const QString &root) {
   query->setPlaceholderText(QObject::tr("Open file by name or path"));
   auto *list = new QListWidget(&dialog);
   layout->addWidget(query);
+  auto *scanStatus = new QLabel(&dialog);
+  scanStatus->setObjectName(QStringLiteral("quickOpenScanStatus"));
+  layout->addWidget(scanStatus);
+  scanStatus->setVisible(truncated);
+  if (truncated)
+    scanStatus->setText(QObject::tr("Showing files from a partial workspace scan (limit: %1 files).")
+                            .arg(kMaxIndexedFiles));
   layout->addWidget(list);
 
   const auto populate = [&] {
@@ -183,11 +209,7 @@ void FindInFilesPanel::focusQuery() {
 void FindInFilesPanel::cancelSearch() {
   if (cancelled_)
     cancelled_->store(true);
-  if (worker_) {
-    worker_->wait();
-    delete worker_;
-    worker_ = nullptr;
-  }
+  cancelled_.reset();
 }
 
 void FindInFilesPanel::startSearch() {
@@ -208,12 +230,12 @@ void FindInFilesPanel::startSearch() {
   auto cancelled = std::make_shared<std::atomic_bool>(false);
   cancelled_ = cancelled;
 
-  worker_ = QThread::create([this, root, needle, matchCase, wholeWord,
-                             cancelled] {
-    const QStringList files = collectWorkspaceFiles(root);
+  auto results = std::make_shared<SearchResults>();
+  auto *worker = QThread::create([root, needle, matchCase, wholeWord,
+                                  cancelled, results] {
+    auto &[matches, matchedFiles, skippedLargeFiles, scanTruncated] = *results;
+    const QStringList files = collectWorkspaceFiles(root, cancelled, &scanTruncated);
     const QDir rootDir(root);
-    QList<SearchMatch> matches;
-    int matchedFiles = 0;
     const Qt::CaseSensitivity cs =
         matchCase ? Qt::CaseSensitive : Qt::CaseInsensitive;
 
@@ -222,25 +244,35 @@ void FindInFilesPanel::startSearch() {
         break;
       const QString absPath = rootDir.filePath(rel);
       QFile file(absPath);
-      if (file.size() > kMaxSearchFileBytes ||
-          !file.open(QIODevice::ReadOnly))
+      if (file.size() > kMaxSearchFileBytes) {
+        ++skippedLargeFiles;
+        continue;
+      }
+      if (!file.open(QIODevice::ReadOnly))
         continue;
       const QByteArray sample = file.peek(1024);
       if (sample.contains('\0'))
         continue;
-      const QString content = QString::fromUtf8(file.readAll());
+      const QByteArray bytes = file.read(kMaxSearchFileBytes + 1);
+      if (bytes.size() > kMaxSearchFileBytes) {
+        ++skippedLargeFiles;
+        continue;
+      }
+      QString content = QString::fromUtf8(bytes);
+      content.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+      content.replace(u'\r', u'\n');
       const QStringList lines = content.split('\n');
       bool fileMatched = false;
       for (int lineIdx = 0;
-           lineIdx < lines.size() && matches.size() < kMaxSearchMatches;
+           lineIdx < lines.size() && matches.size() < kMaxSearchMatches &&
+           !cancelled->load();
            ++lineIdx) {
         const QString &line = lines.at(lineIdx);
         qsizetype pos = 0;
         while ((pos = line.indexOf(needle, pos, cs)) >= 0) {
           if (!wholeWord || isWholeWordMatch(line, pos, needle.size())) {
-            const int column =
-                static_cast<int>(line.left(pos).toUtf8().size());
-            matches.append({absPath, rel, lineIdx, column, line.trimmed()});
+            const int byteColumn = static_cast<int>(QStringView(line).first(pos).toUtf8().size());
+            matches.append({absPath, rel, lineIdx, byteColumn, line.trimmed()});
             fileMatched = true;
             break;
           }
@@ -250,34 +282,40 @@ void FindInFilesPanel::startSearch() {
       if (fileMatched)
         ++matchedFiles;
     }
-
-    QMetaObject::invokeMethod(
-        this,
-        [this, matches = std::move(matches), matchedFiles, cancelled] {
-          if (cancelled->load())
-            return;
-          for (const SearchMatch &m : matches) {
-            const QString label = QStringLiteral("%1:%2: %3")
-                                      .arg(m.relativePath)
-                                      .arg(m.line + 1)
-                                      .arg(m.preview);
-            auto *item = new QListWidgetItem(label, results_);
-            item->setData(Qt::UserRole, m.absolutePath);
-            item->setData(Qt::UserRole + 1, m.line);
-            item->setData(Qt::UserRole + 2, m.column);
-          }
-          status_->setText(
-              matches.size() >= kMaxSearchMatches
-                  ? tr("%1+ matches in %2 files")
-                        .arg(matches.size())
-                        .arg(matchedFiles)
-                  : tr("%1 matches in %2 files")
-                        .arg(matches.size())
-                        .arg(matchedFiles));
-        },
-        Qt::QueuedConnection);
   });
-  worker_->start();
+  connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+  connect(worker, &QThread::finished, this, [this, cancelled, results] {
+    if (cancelled->load())
+      return;
+    const auto &[matches, matchedFiles, skippedLargeFiles, scanTruncated] = *results;
+    for (const SearchMatch &m : matches) {
+      const QString label = QStringLiteral("%1:%2: %3")
+                                .arg(m.relativePath)
+                                .arg(m.line + 1)
+                                .arg(m.preview);
+      auto *item = new QListWidgetItem(label, results_);
+      item->setData(Qt::UserRole, m.absolutePath);
+      item->setData(Qt::UserRole + 1, m.line);
+      item->setData(Qt::UserRole + 2, m.byteColumn);
+    }
+    QString summary = matches.size() >= kMaxSearchMatches
+                          ? tr("%1+ matches in %2 files")
+                                .arg(matches.size())
+                                .arg(matchedFiles)
+                          : tr("%1 matches in %2 files")
+                                .arg(matches.size())
+                                .arg(matchedFiles);
+    if (scanTruncated || skippedLargeFiles > 0) {
+      summary += tr(" — partial results");
+      if (scanTruncated)
+        summary += tr(" (workspace scan limit reached)");
+      if (skippedLargeFiles > 0)
+        summary += tr(" (%1 files over 2 MiB skipped)")
+                       .arg(skippedLargeFiles);
+    }
+    status_->setText(summary);
+  });
+  worker->start();
 }
 
 } // namespace nebula

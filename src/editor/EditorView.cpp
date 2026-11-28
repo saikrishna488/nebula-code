@@ -666,6 +666,14 @@ void EditorView::goToLineColumn(qsizetype line, qsizetype column)
     setCursorPosition(editor_->send(SCI_FINDCOLUMN, line, std::max<qsizetype>(0, column)));
 }
 
+void EditorView::goToLineByteColumn(qsizetype line, qsizetype byteColumn)
+{
+    line = std::clamp<qsizetype>(line, 0, editor_->send(SCI_GETLINECOUNT) - 1);
+    const qsizetype start = editor_->send(SCI_POSITIONFROMLINE, line);
+    const qsizetype end = editor_->send(SCI_GETLINEENDPOSITION, line);
+    setCursorPosition(start + std::clamp<qsizetype>(byteColumn, 0, end - start));
+}
+
 void EditorView::undo()
 {
     editor_->send(SCI_UNDO);

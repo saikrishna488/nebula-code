@@ -17,6 +17,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QFileSystemWatcher>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -92,6 +93,16 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   editorArea_->setChildrenCollapsible(false);
   editorArea_->addWidget(tabs_);
   setCentralWidget(editorArea_);
+  fileWatcher_ = new QFileSystemWatcher(this);
+  fileRefreshTimer_ = new QTimer(this);
+  fileRefreshTimer_->setSingleShot(true);
+  fileRefreshTimer_->setInterval(120);
+  connect(fileWatcher_, &QFileSystemWatcher::fileChanged, this,
+          [this] { fileRefreshTimer_->start(); });
+  connect(fileWatcher_, &QFileSystemWatcher::directoryChanged, this,
+          [this] { fileRefreshTimer_->start(); });
+  connect(fileRefreshTimer_, &QTimer::timeout, this,
+          &Workbench::processChangedFiles);
   const auto dock = [this](const QString &title, Qt::DockWidgetArea area,
                            QWidget *content) {
     auto *d = new QDockWidget(title, this);
@@ -111,30 +122,36 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
             const QString oldPrefix = oldNorm + '/';
             for (int i = 0; i < tabs_->count(); ++i) {
               auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
-              if (tab->file.path == oldNorm) {
-                tab->file.path = newNorm;
-                tab->primary->setLanguageForPath(newNorm);
+              if (tab->file.path == oldNorm ||
+                  tab->file.path.startsWith(oldPrefix)) {
+                const QString previousPath = tab->file.path;
+                const QString updatedPath =
+                    tab->file.path == oldNorm
+                        ? newNorm
+                        : newNorm + tab->file.path.mid(oldNorm.size());
+                lsp_->closeDocument(previousPath);
+                tab->file.path = updatedPath;
+                tab->primary->setLanguageForPath(updatedPath);
                 if (tab->secondary)
-                  tab->secondary->setLanguageForPath(newNorm);
-                updateLanguage(tab);
-                updateTitle(tab);
-              } else if (tab->file.path.startsWith(oldPrefix)) {
-                tab->file.path = newNorm + tab->file.path.mid(oldNorm.size());
+                  tab->secondary->setLanguageForPath(updatedPath);
                 updateLanguage(tab);
                 updateTitle(tab);
               }
             }
+            refreshFileWatches();
           });
   connect(sidebar_, &Sidebar::pathDeleted, this, [this](const QString &path) {
     const QString norm = normalizedPath(path);
     const QString prefix = norm + '/';
     for (int i = tabs_->count() - 1; i >= 0; --i) {
       auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
-      if ((tab->file.path == norm || tab->file.path.startsWith(prefix)) &&
-          !tab->primary->isModified()) {
-        closeTab(i);
+      if (tab->file.path == norm || tab->file.path.startsWith(prefix)) {
+        tab->fileMissing = true;
+        updateTitle(tab);
+        report(tr("File was deleted: %1").arg(tab->file.path));
       }
     }
+    refreshFileWatches();
   });
   addDockWidget(Qt::LeftDockWidgetArea, sidebar_);
   setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
@@ -156,10 +173,10 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   searchDock_ = dock(tr("Find in Files"), Qt::BottomDockWidgetArea, findInFiles_);
   searchDock_->hide();
   connect(findInFiles_, &FindInFilesPanel::matchActivated, this,
-          [this](const QString &path, int line, int column) {
+          [this](const QString &path, int line, int byteColumn) {
             if (!openFile(path) || !current())
               return;
-            current()->active->goToLineColumn(line, column);
+            current()->active->goToLineByteColumn(line, byteColumn);
             current()->active->setFocus();
           });
   lsp_ = new LspClient(this);
@@ -244,6 +261,7 @@ Workbench::Workbench(const QString &root, bool restoreWorkspace)
   }
   applyTheme();
   updateTitle(current());
+  refreshFileWatches();
   commands_.refresh();
 }
 
@@ -310,6 +328,7 @@ bool Workbench::switchWorkspace(const QString &path) {
   if (!current())
     createTab({});
   updateTitle(current());
+  refreshFileWatches();
   applyTheme();
   commands_.refresh();
   if (reopenTerminal)
@@ -375,6 +394,7 @@ void Workbench::attachTab(DocumentTab *tab) {
   tab->active->setFocus();
   updateTitle(tab);
   updateLanguage(tab);
+  refreshFileWatches();
 }
 void Workbench::updateLanguage(DocumentTab *tab) {
   tab->languageService = !root_.isEmpty() &&
@@ -546,6 +566,7 @@ void Workbench::moveTabToNewWindow(DocumentTab *tab) {
   tabs_->removeTab(tabs_->indexOf(tab));
   if (!tabs_->count())
     createTab({});
+  refreshFileWatches();
   window->attachTab(tab);
   window->show();
   window->activateWindow();
@@ -581,6 +602,8 @@ void Workbench::updateTitle(DocumentTab *tab) {
   if (!tab)
     return;
   QString title = titleFor(tab);
+  if (tab->fileMissing)
+    title += tr(" (Missing)");
   if (tab->primary->isModified())
     title += " •";
   int index = tabs_->indexOf(tab);
@@ -596,6 +619,86 @@ void Workbench::updateTitle(DocumentTab *tab) {
     setWindowTitle(
         title + " — " +
         (root_.isEmpty() ? tr("Nebula Code") : QFileInfo(root_).fileName()));
+}
+
+void Workbench::refreshFileWatches() {
+  if (!fileWatcher_)
+    return;
+  const auto watched = fileWatcher_->files() + fileWatcher_->directories();
+  QStringList paths;
+  for (int i = 0; i < tabs_->count(); ++i) {
+    const auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
+    if (tab->file.path.isEmpty())
+      continue;
+    const QFileInfo info(tab->file.path);
+    if (info.exists())
+      paths.append(info.absoluteFilePath());
+    const QString parent = info.absolutePath();
+    if (QFileInfo(parent).isDir())
+      paths.append(parent);
+  }
+  paths.removeDuplicates();
+  QStringList removed;
+  for (const auto &path : watched) {
+    if (!paths.removeOne(path))
+      removed.append(path);
+  }
+  if (!removed.isEmpty())
+    fileWatcher_->removePaths(removed);
+  if (!paths.isEmpty())
+    fileWatcher_->addPaths(paths);
+}
+
+void Workbench::processChangedFiles() {
+  for (int i = 0; i < tabs_->count(); ++i) {
+    auto *tab = static_cast<DocumentTab *>(tabs_->widget(i));
+    if (tab->file.path.isEmpty())
+      continue;
+    if (!QFileInfo::exists(tab->file.path)) {
+      if (!tab->fileMissing) {
+        tab->fileMissing = true;
+        updateTitle(tab);
+        report(tr("File was deleted outside Nebula: %1").arg(tab->file.path));
+      }
+      continue;
+    }
+
+    FileState diskFile;
+    QString error;
+    if (!loadFile(tab->file.path, diskFile, error))
+      continue;
+    tab->fileMissing = false;
+    if (tab->primary->isModified()) {
+      if (diskFile.diskHash != tab->file.diskHash)
+        report(tr("File changed on disk; unsaved edits were kept: %1")
+                   .arg(tab->file.path));
+      updateTitle(tab);
+      continue;
+    }
+    if (diskFile.diskHash == tab->file.diskHash) {
+      updateTitle(tab);
+      continue;
+    }
+
+    applyLoadedFile(tab, std::move(diskFile));
+  }
+  refreshFileWatches();
+}
+
+void Workbench::applyLoadedFile(DocumentTab *tab, FileState file) {
+  const auto line = tab->primary->cursorLine();
+  const auto column = tab->primary->cursorColumn();
+  const auto secondLine = tab->secondary ? tab->secondary->cursorLine() : 0;
+  const auto secondColumn = tab->secondary ? tab->secondary->cursorColumn() : 0;
+  tab->primary->setTextUtf8(file.bytes);
+  tab->primary->goToLineColumn(line, column);
+  if (tab->secondary)
+    tab->secondary->goToLineColumn(secondLine, secondColumn);
+  file.bytes.clear();
+  tab->file = std::move(file);
+  tab->fileMissing = false;
+  updateLanguage(tab);
+  updateTitle(tab);
 }
 
 bool Workbench::save(DocumentTab *tab) {
@@ -659,8 +762,10 @@ bool Workbench::save(DocumentTab *tab) {
       tab->secondary->setLanguageForPath(file.path);
     updateLanguage(tab);
   }
+  tab->fileMissing = false;
   updateTitle(tab);
   report(tr("Saved %1").arg(file.path));
+  refreshFileWatches();
   return true;
 }
 bool Workbench::canClose(DocumentTab *tab) {
@@ -687,6 +792,7 @@ void Workbench::closeTab(int index) {
   delete tab;
   if (!tabs_->count())
     createTab({});
+  refreshFileWatches();
 }
 
 void Workbench::setupCommands() {
@@ -705,6 +811,7 @@ void Workbench::setupCommands() {
   add(help, "help.credits", tr("Credits"), {}, [this] {
     QMessageBox credits(QMessageBox::NoIcon, tr("Nebula Code Credits"),
                         tr("Project owner — @saikrishna488\n"
+                           "Contributor — @Rakshith4529\n"
                            "Development assistance — Codex (GPT-6.2 Sol)"),
                         QMessageBox::Ok, this);
     credits.setTextFormat(Qt::PlainText);
@@ -766,10 +873,8 @@ void Workbench::setupCommands() {
           report(error);
           return;
         }
-        tab->primary->setTextUtf8(file.bytes);
-        file.bytes.clear();
-        tab->file = std::move(file);
-        tab->primary->setSavePoint();
+        applyLoadedFile(tab, std::move(file));
+        refreshFileWatches();
       },
       [this] { return current() && !current()->file.path.isEmpty(); });
   add(
