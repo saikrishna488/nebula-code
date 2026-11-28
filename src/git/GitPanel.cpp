@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QTreeWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -23,8 +24,14 @@ GitPanel::GitPanel(QWidget *parent)
       unstage_(new QPushButton(tr("Unstage"), this)),
       stagedDiff_(new QPushButton(tr("Staged Diff"), this)),
       unstagedDiff_(new QPushButton(tr("Unstaged Diff"), this)),
-      commit_(new QPushButton(tr("Commit"), this))
+      commit_(new QPushButton(tr("Commit"), this)),
+      statusRefreshTimer_(new QTimer(this))
 {
+    statusRefreshTimer_->setInterval(1500);
+    connect(statusRefreshTimer_, &QTimer::timeout, this, [this] {
+        if (!repository_->root().isEmpty() && !repository_->busy())
+            repository_->refresh();
+    });
     status_->setTextFormat(Qt::PlainText);
     status_->setWordWrap(true);
     error_->setTextFormat(Qt::PlainText);
@@ -126,6 +133,10 @@ GitPanel::GitPanel(QWidget *parent)
 
 void GitPanel::setWorkspace(const QString &root)
 {
+    if (root.isEmpty())
+        statusRefreshTimer_->stop();
+    else
+        statusRefreshTimer_->start();
     if (root == repository_->workspace()) {
         if (!root.isEmpty() && !repository_->busy()) {
             error_->hide();

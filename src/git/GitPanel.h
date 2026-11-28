@@ -8,6 +8,7 @@ class QLineEdit;
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QTimer;
 class QTreeWidget;
 
 namespace nebula {
@@ -36,6 +37,7 @@ private:
     QPushButton *stagedDiff_;
     QPushButton *unstagedDiff_;
     QPushButton *commit_;
+    QTimer *statusRefreshTimer_;
     QList<GitEntry> entries_;
 };
 
